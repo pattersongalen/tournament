@@ -1,11 +1,10 @@
 class Admin::MembersController < Admin::BaseController
+  include OrganizerActions::MembersRoster
   before_action :require_site_admin!, only: [:edit, :update, :destroy, :reactivate, :purge]
   before_action :require_permanent_organizer!, only: [:role]
 
   def index
-    @users = current_club.members.includes(:club_memberships).order(:deactivated_at, :name)
-    @season_tag = SeasonPoints::CurrentSeasonTag.call(club: current_club)
-    @main_nights = SeasonPoints::ParticipationCounts.call(club: current_club, season_tag: @season_tag)
+    load_members_roster
     # Members with any catch FK (logged by them, or logged *for* them by a
     # teammate) can't be purged — mirror MembersController#purge's guard so the
     # Delete button only shows when the destroy! would actually succeed.

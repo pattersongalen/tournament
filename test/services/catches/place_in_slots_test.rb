@@ -933,6 +933,31 @@ module Catches
     assert_empty result[:affected_tournaments]
   end
 
+  test "tagged: a catch re-placed after the draw keeps its ticket" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    PlaceInSlots.call(catch: fish)
+    ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+    t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+
+    # The judge flows deactivate before re-placing (correction, DQ -> reinstate).
+    ticket.update!(active: false)
+    result = PlaceInSlots.call(catch: fish)
+
+    assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
+                 "a fish that was in the draw keeps a ticket after a post-draw re-placement"
+    assert_equal [t], result[:affected_tournaments]
+  end
+
   test "tagged: new catch after a placement is deactivated does not collide on slot_index" do
     club = create(:club)
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")

@@ -248,6 +248,20 @@ class CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_select "form[action=?]", review_path, 0, "judged: a non-judge organizer gets no actions"
   end
 
+  test "show: the inline override form on a friendly tournament carries the science-tag field" do
+    catch_record = create(:catch, user: @user, species: @walleye, length_inches: 18.5)
+    Catches::PlaceInSlots.call(catch: catch_record)
+    sign_in_as(create(:user, club: @club, role: :organizer))
+
+    get catch_path(catch_record.id, t: @tournament.id)
+    assert_response :success
+    override_path = judges_tournament_catch_manual_override_path(tournament_id: @tournament.id, catch_id: catch_record.id)
+    assert_select "form[action=?]", override_path do
+      assert_select "input[name=tag_number]", 1, "species can be switched to Tagged Walleye, which requires a tag"
+    end
+    assert_select "form[action=?][data-controller~=tag-field]", override_path, 1
+  end
+
   test "index lists only the signed-in member's catches and hides the possible-duplicate badge" do
     own = create(:catch, user: @user, species: @walleye, length_inches: 18.5,
                          flags: ["possible_duplicate"], status: :needs_review,

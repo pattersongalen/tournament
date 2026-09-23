@@ -1,8 +1,8 @@
 module SeasonPoints
   # How many league-night Mains each member has fished this season, keyed by
-  # user id. "Main" means a tournament that awards season points (the same
-  # selector SeasonPoints::Tournaments uses), so it needs no name matching and
-  # survives renames.
+  # user id. "Main" means a tournament that awards season points (the selector
+  # shared with the standings via SeasonPoints::Tournaments.eligible), so it
+  # needs no name matching and survives renames.
   #
   # Unlike the standings, which only count a night once it has ENDED, a night
   # counts here as soon as it has started: the members page is a roster view
@@ -15,7 +15,7 @@ module SeasonPoints
 
       ::TournamentEntryMember
         .joins(tournament_entry: :tournament)
-        .where(tournaments: { club_id: club.id, awards_season_points: true, season_tag: season_tag })
+        .merge(::SeasonPoints::Tournaments.eligible(club: club, season_tag: season_tag))
         .where("tournaments.starts_at <= ?", now)
         .group(:user_id)
         .distinct

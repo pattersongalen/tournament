@@ -28,12 +28,7 @@
     </label>
   <% end %>
 
-  <div data-tag-field-target="wrapper" class="<%= 'hidden' unless show_tag_field?(@catch) %>">
-    <%= label_tag :tag_number, "Science tag # (Tagged Walleye)" %>
-    <%= text_field_tag :tag_number, @catch.tag_number, maxlength: 16, autocomplete: "off",
-                       autocapitalize: "characters", spellcheck: false,
-                       data: { "tag-field-target": "input" } %>
-  </div>
+  <%= render "catches/tag_field", catch_record: @catch, label_class: nil, input_class: nil %>
 
   <% if @tournament.supports_forced_slot? %>
     <%# Forcing a catch into a specific slot only makes sense on slot-based

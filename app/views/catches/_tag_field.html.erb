@@ -1,0 +1,16 @@
+<%#
+  Science-tag input for the species/length editors (organizer editor, judge
+  manual override, and the inline override on the catch page). The enclosing
+  form must carry `data-controller="tag-field"` with
+  `tag_field_tagged_species_id_value`, and its species select must fire
+  `change->tag-field#toggle`, so the field shows only for Tagged Walleye.
+  Rendering it from ONE place keeps every editor able to satisfy (and clear)
+  the model's tag-required rule in the same submit.
+%>
+<div data-tag-field-target="wrapper" class="<%= 'hidden' unless show_tag_field?(catch_record) %>">
+  <%= label_tag :tag_number, "Science tag # (Tagged Walleye)", class: label_class %>
+  <%= text_field_tag :tag_number, catch_record.tag_number, maxlength: 16, autocomplete: "off",
+                     autocapitalize: "characters", spellcheck: false,
+                     data: { "tag-field-target": "input" },
+                     class: input_class %>
+</div>

@@ -143,11 +143,18 @@ module Catches
             # Tagged-Walleye species somehow slots into a tagged tournament.
             next if @catch.tag_number.blank?
             # The draw pool closes when the winner is drawn. A catch arriving
-            # after that (a late offline sync, a reinstate, a science tag filled
-            # in from the photo the next day) keeps its tag but earns no ticket:
-            # it was never in the draw, and a fresh row would list it on the
-            # leaderboard as if it had been.
-            next if tournament.drawn_at.present?
+            # after that (a late offline sync, a science tag filled in from the
+            # photo the next day) keeps its tag but earns no ticket: it was
+            # never in the draw, and a fresh row would list it on the
+            # leaderboard as if it had been. A catch that already held a ticket
+            # here WAS in the draw, so a post-draw re-placement (the judge
+            # flows deactivate before re-placing: a GPS fix, a geofence
+            # override, a DQ undone by reinstate) re-issues its ticket rather
+            # than stripping it — the drawn winner's row must survive a
+            # correction to the winning fish.
+            if tournament.drawn_at.present?
+              next unless CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id).exists?
+            end
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1
             created << CatchPlacement.create!(
               catch: @catch, tournament: tournament, tournament_entry: entry,

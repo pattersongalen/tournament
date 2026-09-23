@@ -89,7 +89,6 @@ module Catches
 
           # Only a tagged-format tournament scores the tag, and only its presence:
           # each tagged catch earns one ticket, a blank-tag catch is skipped.
-          rebuilt = false
           if species_changed
             # A new species can make the catch newly (in)eligible, so rebuild its
             # placements from scratch. This is also the only way a tag legitimately
@@ -100,7 +99,6 @@ module Catches
             # format like Fish Train a needless rebuild would leave a permanent
             # hole and re-append the fish out of capture order.
             deactivate_and_replace!
-            rebuilt = true
           elsif tag_changed && prior_tag.nil? && @catch.species.tagged_walleye?
             # blank -> present on a Tagged Walleye: the catch may now qualify for
             # a tagged tournament that skipped it. Re-place into ONLY those
@@ -143,15 +141,17 @@ module Catches
               catch: @catch, tournament: @tournament, tournament_entry: entry,
               species: @catch.species, slot_index: @slot_index, active: true
             )
-          elsif !rebuilt && @length_inches && prior_length && @length_inches.to_f != prior_length.to_f
+          elsif !species_changed && @length_inches && prior_length && @length_inches.to_f != prior_length.to_f
             # A length edit can change which catches make each basket — it can pull
             # in a previously-unplaced backup (e.g. one grown past a slot threshold)
             # or drop a now-smaller fish. So re-derive every tournament the catch is
             # ELIGIBLE for at its capture time, not just the ones where it currently
             # holds a placement. Re-derivation from the whole eligible set is correct
-            # for grow and shrink alike (no shrink gating). A species or tag change
-            # that already rebuilt placements via deactivate_and_replace! used the
-            # new length, so skip then.
+            # for grow and shrink alike (no shrink gating). A species change
+            # already rebuilt placements via deactivate_and_replace! with the new
+            # length, so skip then. A tag change does NOT: its re-placement only
+            # visits tagged tournaments (which don't score length), so a length
+            # fix submitted alongside a tag still reconciles here.
             candidate_rows = reachable_rows
             # Which of those tournaments actually score this species? Resolve it in
             # one query rather than a per-row scoring_slots.exists? (an N+1 under the

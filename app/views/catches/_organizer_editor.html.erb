@@ -50,13 +50,9 @@
     <% end %>
   </div>
 
-  <div data-tag-field-target="wrapper" class="<%= 'hidden' unless show_tag_field?(catch_record) %>">
-    <%= label_tag :tag_number, "Science tag # (Tagged Walleye)", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
-    <%= text_field_tag :tag_number, catch_record.tag_number, maxlength: 16, autocomplete: "off",
-                       autocapitalize: "characters", spellcheck: false,
-                       data: { "tag-field-target": "input" },
-                       class: "w-full h-12 px-3 rounded-lg bg-slate-800 border border-slate-700 text-base text-slate-100 font-mono uppercase" %>
-  </div>
+  <%= render "catches/tag_field", catch_record: catch_record,
+             label_class: "block text-sm font-medium text-slate-300 mt-4 mb-1",
+             input_class: "w-full h-12 px-3 rounded-lg bg-slate-800 border border-slate-700 text-base text-slate-100 font-mono uppercase" %>
 
   <%= label_tag :note, "Note (optional)", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
   <%= text_area_tag :note, nil, rows: 3,
