@@ -2,6 +2,7 @@ import { Controller } from "@hotwired/stimulus"
 import { enqueueCatch, updateCoords, releaseHold, extendHold } from "offline/db"
 import { currentUserId } from "offline/current_user"
 import { convertLength, snapToGrid } from "lib/length_convert"
+import { isTaggedSpecies } from "lib/tag_rule"
 
 // How long a freshly queued catch is held out of drains while submit() waits
 // for a GPS fix. One constant for both the initial hold_until and the
@@ -52,11 +53,14 @@ export default class extends Controller {
   }
 
   refresh() {
-    const isTagged = this.hasTaggedSpeciesIdValue
-                  && this.taggedSpeciesIdValue !== ""
-                  && String(this.speciesSelectTarget.value) === String(this.taggedSpeciesIdValue)
+    const isTagged = this._isTaggedSpecies()
     if (this.hasTagWrapperTarget) this.tagWrapperTarget.classList.toggle("hidden", !isTagged)
     this.statusTarget.textContent = this._missingFieldMessage() ?? ""
+  }
+
+  _isTaggedSpecies() {
+    return this.hasTaggedSpeciesIdValue
+        && isTaggedSpecies(this.speciesSelectTarget.value, this.taggedSpeciesIdValue)
   }
 
   _missingFieldMessage() {
@@ -68,9 +72,7 @@ export default class extends Controller {
       const speciesName = this.speciesSelectTarget.selectedOptions[0]?.text ?? "this species"
       return `${speciesName} can't exceed ${cap}″.`
     }
-    const isTagged = this.hasTaggedSpeciesIdValue
-                  && this.taggedSpeciesIdValue !== ""
-                  && String(this.speciesSelectTarget.value) === String(this.taggedSpeciesIdValue)
+    const isTagged = this._isTaggedSpecies()
     if (isTagged && this.hasTagInputTarget && !this.tagInputTarget.value.trim()) {
       return "Enter the tag number on the fish."
     }

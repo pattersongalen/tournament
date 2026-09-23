@@ -52,7 +52,7 @@ module Tournaments
       placed = 0
       candidates.each do |catch_record|
         result = ::Catches::PlaceInSlots.call(
-          catch: catch_record, broadcast: false, tournament: tournament
+          catch: catch_record, broadcast: false, tournaments: [tournament]
         )
         placed += 1 if result[:affected_tournaments].any?
       end

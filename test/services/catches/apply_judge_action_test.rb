@@ -1131,6 +1131,33 @@ module Catches
       assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
     end
 
+    test "manual_override tag_number does not mint a ticket into a tagged tournament already drawn" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      ticket = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
+      t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+
+      stranded = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                        tag_number: "TMP", captured_at_device: 90.minutes.ago)
+      stranded.update_column(:tag_number, nil)
+
+      ApplyJudgeAction.call(tournament: nil, catch: stranded, judge: @judge, action: :manual_override,
+                            tag_number: "A0042", note: "tag from photo", club: @club)
+
+      assert_equal "A0042", stranded.reload.tag_number, "the tag itself is still recorded"
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: stranded).count,
+                   "the draw pool is closed once the winner is drawn"
+      assert ticket.reload.active
+    end
+
     test "manual_override with an unchanged tag_number leaves the tag alone" do
       tagged = Species.find_or_create_by!(name: "Tagged Walleye")
       fish = create(:catch, user: @user, species: tagged, length_inches: 18.0, tag_number: "A0001")

@@ -909,6 +909,30 @@ module Catches
     assert_equal [0, 1, 2], placements.map(&:slot_index)
   end
 
+  test "tagged: a catch placed after the draw earns no ticket" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    first = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                   tag_number: "A0001", captured_at_device: 2.hours.ago)
+    PlaceInSlots.call(catch: first)
+    ticket = CatchPlacement.find_by!(tournament: t, catch: first, active: true)
+    t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+
+    late = create(:catch, user: user, species: tagged, length_inches: 17.0,
+                  tag_number: "A0002", captured_at_device: 90.minutes.ago)
+    result = PlaceInSlots.call(catch: late)
+
+    assert_equal 0, CatchPlacement.where(tournament: t, catch: late).count
+    assert_empty result[:affected_tournaments]
+  end
+
   test "tagged: new catch after a placement is deactivated does not collide on slot_index" do
     club = create(:club)
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")
@@ -1150,14 +1174,14 @@ module Catches
     assert_equal [0, 1, 2], active.order(:slot_index).pluck(:slot_index)
   end
 
-  test "tournament: scope places only into that tournament" do
+  test "tournaments: scope with one tournament places only into that tournament" do
     other = create(:tournament, club: @club, starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
     create(:scoring_slot, tournament: other, species: @walleye, slot_count: 2)
     other_entry = create(:tournament_entry, tournament: other)
     create(:tournament_entry_member, tournament_entry: other_entry, user: @user)
 
     catch_record = create(:catch, user: @user, species: @walleye, length_inches: 20)
-    PlaceInSlots.call(catch: catch_record, tournament: @tournament)
+    PlaceInSlots.call(catch: catch_record, tournaments: [@tournament])
 
     assert_equal [@tournament.id], catch_record.catch_placements.pluck(:tournament_id),
                  "scoped call must not place into the other overlapping tournament"

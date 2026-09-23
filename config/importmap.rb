@@ -3,6 +3,7 @@
 pin "application"
 pin "sw_register", to: "sw_register.js"
 pin "lib/length_convert", to: "lib/length_convert.js"
+pin "lib/tag_rule", to: "lib/tag_rule.js"
 pin "lib/leaflet_default_icons", to: "lib/leaflet_default_icons.js"
 pin "lib/leaflet_teardown", to: "lib/leaflet_teardown.js"
 pin "lib/ios_device", to: "lib/ios_device.js"

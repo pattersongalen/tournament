@@ -13,6 +13,15 @@ module ApplicationHelper
     species.find(&:tagged_walleye?)&.id
   end
 
+  # Whether the organizer/judge catch editors show the science-tag field on
+  # first render. The tag only scores on Tagged Walleye, so show it there, and
+  # on any catch already carrying a (stray) tag so it can be cleared; hide it
+  # otherwise so a length fix on a plain Walleye doesn't invite a meaningless
+  # tag. tag_field_controller applies the same rule as the species changes.
+  def show_tag_field?(catch_record)
+    catch_record.species.tagged_walleye? || catch_record.tag_number.present?
+  end
+
   def tournament_window(tournament)
     starts_at = tournament.starts_at
     ends_at   = tournament.ends_at

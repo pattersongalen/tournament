@@ -6,23 +6,22 @@ module Catches
     # shorter than the 90s floor deferRetry imposes before a client retries.
     IN_FLIGHT_WINDOW = 30.seconds
 
-    def self.call(catch:, broadcast: true, club: nil, tournament: nil, tournaments: nil)
-      new(catch: catch, broadcast: broadcast, club: club, tournament: tournament, tournaments: tournaments).call
+    def self.call(catch:, broadcast: true, club: nil, tournaments: nil)
+      new(catch: catch, broadcast: broadcast, club: club, tournaments: tournaments).call
     end
 
-    def initialize(catch:, broadcast: true, club: nil, tournament: nil, tournaments: nil)
+    def initialize(catch:, broadcast: true, club: nil, tournaments: nil)
       @catch = catch
       @broadcast = broadcast
       # When set (organizer/admin catch editor), only place into this club's
       # tournaments so a per-club edit never reshuffles another club's baskets.
       @club = club
-      # When set, only place into these tournaments. `tournament:` is the
-      # single-tournament form (late-entrant backfill: a sweep never touches
-      # other tournaments the user was active in during the same window);
-      # `tournaments:` is the list form (a science-tag edit re-placing into
-      # every tagged tournament the catch reaches, in one run). An empty list
-      # places nowhere — it is a scope, not an absence of one.
-      @only_tournament_ids = tournaments&.map(&:id) || (tournament && [tournament.id])
+      # When set, only place into these tournaments: the late-entrant backfill
+      # passes the one tournament it sweeps (never touching other tournaments
+      # the user was active in during the same window), and a science-tag edit
+      # passes every tagged tournament the catch reaches, in one run. An empty
+      # list places nowhere — it is a scope, not an absence of one.
+      @only_tournament_ids = tournaments&.map(&:id)
     end
 
     def call
@@ -143,6 +142,12 @@ module Catches
             # validates presence for Tagged Walleye, so this only fires if a non-
             # Tagged-Walleye species somehow slots into a tagged tournament.
             next if @catch.tag_number.blank?
+            # The draw pool closes when the winner is drawn. A catch arriving
+            # after that (a late offline sync, a reinstate, a science tag filled
+            # in from the photo the next day) keeps its tag but earns no ticket:
+            # it was never in the draw, and a fresh row would list it on the
+            # leaderboard as if it had been.
+            next if tournament.drawn_at.present?
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1
             created << CatchPlacement.create!(
               catch: @catch, tournament: tournament, tournament_entry: entry,

@@ -111,7 +111,12 @@ module Catches
             # where the catch already holds an active placement).
             tagged_rows = reachable_rows.select { |r| r[:tournament].format_tagged? }
             if tagged_rows.any?
-              lock_entries!(tagged_rows.map { |r| r[:entry].id })
+              # Lock every entry this edit can touch, not just the tagged ones:
+              # a length fix submitted alongside the tag reconciles the other
+              # reachable entries below, and locking a tagged entry first would
+              # take them out of ascending order against a concurrent
+              # PlaceInSlots (a deadlock).
+              lock_touched_entries!
               # One run scoped to the list: PlaceInSlots resolves the reachable
               # tournaments itself, so a per-tournament call would repeat that
               # lookup once per tagged tournament under the row lock held here.
@@ -299,23 +304,41 @@ module Catches
     # [{ tournament:, entry: }] rows PlaceInSlots would iterate for this catch,
     # narrowed to the editing club when one is set (mirrors PlaceInSlots' own
     # club filter so a per-club edit never places into another club's event).
+    # Memoized: the set depends only on the catch's owner, capture time and the
+    # editing club, none of which change during a call, and the branches above
+    # would otherwise repeat its two queries under the @catch row lock.
     def reachable_rows
-      rows = ::Tournaments::ActiveForUser.with_entries(user: @catch.user, at: @catch.captured_at_device)
-      rows = rows.select { |r| r[:tournament].club_id == @club.id } if @club
-      rows
+      @reachable_rows ||= begin
+        rows = ::Tournaments::ActiveForUser.with_entries(user: @catch.user, at: @catch.captured_at_device)
+        rows = rows.select { |r| r[:tournament].club_id == @club.id } if @club
+        rows
+      end
+    end
+
+    # The catch's active placements this edit may rebuild: every one for a judge
+    # action (no @club), only the editing club's for a per-club editor edit.
+    def rebuildable_placements
+      active = @catch.catch_placements.active
+      active = active.joins(:tournament).where(tournaments: { club_id: @club.id }) if @club
+      active
+    end
+
+    # Lock, in one ascending pass, every entry a re-placement can touch: the
+    # ones the catch currently occupies plus the ones PlaceInSlots will iterate.
+    # Taking them all up front keeps later per-entry locks (ReconcileBasket,
+    # PlaceInSlots) re-locks of rows already held, so the order can't invert.
+    def lock_touched_entries!
+      lock_entries!(rebuildable_placements.pluck(:tournament_entry_id) + reachable_entry_ids)
     end
 
     # Drop the catch's active placements, promote backups into the freed slots,
     # then re-place the catch under its current state. A changed location,
     # override, or species can make the catch newly (in)eligible, so placements
     # are rebuilt from scratch. Used by geofence_override, correct_location, and
-    # the species-change / tag-blanked branch of manual_override.
+    # the species-change branch of manual_override.
     def deactivate_and_replace!
-      # A per-club editor edit only rebuilds its own club's placements; a judge
-      # action (no @club) rebuilds every tournament the catch is in.
-      active = @catch.catch_placements.active
-      active = active.joins(:tournament).where(tournaments: { club_id: @club.id }) if @club
-      lock_entries!(active.pluck(:tournament_entry_id) + reachable_entry_ids)
+      lock_touched_entries!
+      active = rebuildable_placements
       freed = active.to_a
       CatchPlacement.where(id: freed.map(&:id)).update_all(active: false)
       freed.each { |p| ::Catches::ReconcileFreedSlot.call(placement: p) }

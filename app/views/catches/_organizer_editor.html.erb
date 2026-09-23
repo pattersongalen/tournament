@@ -7,10 +7,6 @@
   unit    = catch_record.length_unit
   prefill = unit == "centimeters" ? display_cm(catch_record.length_inches, unit) : catch_record.length_inches
   species_options = ordered_species.map { |s| [s.name, s.id] }
-  # The tag only scores on Tagged Walleye. Show the field there, and on any
-  # catch already carrying a (stray) tag so it can be cleared; hide it otherwise
-  # so a length fix on a plain Walleye doesn't invite a meaningless tag.
-  show_tag = catch_record.species.tagged_walleye? || catch_record.tag_number.present?
 %>
 
 <div class="mb-4">
@@ -54,7 +50,7 @@
     <% end %>
   </div>
 
-  <div data-tag-field-target="wrapper" class="<%= 'hidden' unless show_tag %>">
+  <div data-tag-field-target="wrapper" class="<%= 'hidden' unless show_tag_field?(catch_record) %>">
     <%= label_tag :tag_number, "Science tag # (Tagged Walleye)", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
     <%= text_field_tag :tag_number, catch_record.tag_number, maxlength: 16, autocomplete: "off",
                        autocapitalize: "characters", spellcheck: false,

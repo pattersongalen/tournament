@@ -1,4 +1,5 @@
 import { Controller } from "@hotwired/stimulus"
+import { isTaggedSpecies } from "lib/tag_rule"
 
 // Shows the science-tag field on the organizer catch editor only when it can
 // matter: the selected species is Tagged Walleye, or the catch already carries
@@ -9,10 +10,7 @@ export default class extends Controller {
   static values = { taggedSpeciesId: String }
 
   toggle(event) {
-    // Same "is the selected species the tagged one" rule as catch_form_controller:
-    // an empty tagged id (species not seeded) never matches.
-    const tagged = this.taggedSpeciesIdValue !== ""
-                && String(event.target.value) === String(this.taggedSpeciesIdValue)
+    const tagged = isTaggedSpecies(event.target.value, this.taggedSpeciesIdValue)
     const hasTag = this.inputTarget.value.trim() !== ""
     this.wrapperTarget.classList.toggle("hidden", !(tagged || hasTag))
   }

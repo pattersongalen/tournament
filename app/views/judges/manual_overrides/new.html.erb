@@ -13,9 +13,6 @@
     prefill = unit == "centimeters" ? display_cm(@catch.length_inches, unit) : @catch.length_inches
     step    = 0.25
     species_options = ordered_species.map { |s| [s.name, s.id] }
-    # Same rule as the organizer editor: the tag only scores on Tagged Walleye,
-    # so show the field there and on a catch already carrying a (stray) tag.
-    show_tag = @catch.species.tagged_walleye? || @catch.tag_number.present?
   %>
   <%= label_tag :species_id, "Species" %>
   <%= select_tag :species_id, options_for_select(species_options, @catch.species_id),
@@ -31,7 +28,7 @@
     </label>
   <% end %>
 
-  <div data-tag-field-target="wrapper" class="<%= 'hidden' unless show_tag %>">
+  <div data-tag-field-target="wrapper" class="<%= 'hidden' unless show_tag_field?(@catch) %>">
     <%= label_tag :tag_number, "Science tag # (Tagged Walleye)" %>
     <%= text_field_tag :tag_number, @catch.tag_number, maxlength: 16, autocomplete: "off",
                        autocapitalize: "characters", spellcheck: false,
