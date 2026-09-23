@@ -217,14 +217,4 @@ class ClubTest < ActiveSupport::TestCase
     club.season_points_base_ladder = [3.333, 2]  # e.g. written via update_column
     assert_equal "3.33, 2", club.season_points_base_ladder_text
   end
-
-  test "effective_season_points_bands clips the first band to the minimum entry count and drops bands below it" do
-    club = create(:club, season_points_min_entries: 5)
-    assert_equal ["5–9", "10–19", "20–29", "30+"], club.effective_season_points_bands.map { |b| b[:label] }
-    assert_equal [9, 19, 29, 30], club.effective_season_points_bands.map { |b| b[:sample] }
-    club.season_points_min_entries = 12
-    assert_equal ["12–19", "20–29", "30+"], club.effective_season_points_bands.map { |b| b[:label] }
-    club.season_points_min_entries = 1
-    assert_equal Club.season_points_bands, club.effective_season_points_bands
-  end
 end

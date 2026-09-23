@@ -61,9 +61,10 @@ module SeasonPoints
           bingo_species_ids: bingo_species_ids
         )
         entry_count = (entries_by_tid[t.id] || []).count { |e| e.users.any? }
+        member_ids = member_ids_by_tid[t.id] || []
         # Ask for the scale first: full_field's ladder is as long as the field,
         # so the number of ranked rows to keep isn't a constant 3 any more.
-        scale = ::Tournaments::PointsScale.call(club: club, entry_count: entry_count)
+        scale = ::Tournaments::PointsScale.call(club: club, entry_count: entry_count, angler_count: member_ids.size)
         top_entries = if scale
           ::Leaderboards::QualifiedRows.call(tournament: t, rows: rows).first(scale.length)
         else
@@ -72,7 +73,7 @@ module SeasonPoints
         awards = ::Tournaments::SeasonPointsAwarded.call(
           tournament: t,
           top_entries: top_entries,
-          member_ids: member_ids_by_tid[t.id] || [],
+          member_ids: member_ids,
           entry_count: entry_count,
           scale: scale
         )
