@@ -6,13 +6,18 @@ module Catches
     # shorter than the 90s floor deferRetry imposes before a client retries.
     IN_FLIGHT_WINDOW = 30.seconds
 
-    def self.call(catch:, broadcast: true, club: nil, tournaments: nil)
-      new(catch: catch, broadcast: broadcast, club: club, tournaments: tournaments).call
+    def self.call(catch:, broadcast: true, club: nil, tournaments: nil, rows: nil)
+      new(catch: catch, broadcast: broadcast, club: club, tournaments: tournaments, rows: rows).call
     end
 
-    def initialize(catch:, broadcast: true, club: nil, tournaments: nil)
+    def initialize(catch:, broadcast: true, club: nil, tournaments: nil, rows: nil)
       @catch = catch
       @broadcast = broadcast
+      # [{ tournament:, entry: }] already resolved by the caller (ApplyJudgeAction
+      # resolves the same set to lock its entries first). Saves re-running
+      # ActiveForUser under the row locks; the club/tournament scopes below
+      # still apply to it.
+      @rows = rows
       # When set (organizer/admin catch editor), only place into this club's
       # tournaments so a per-club edit never reshuffles another club's baskets.
       @club = club
@@ -51,8 +56,7 @@ module Catches
           .where(catch_id: @catch.id, active: true)
           .distinct.pluck(:tournament_id).to_set
 
-        rows = Tournaments::ActiveForUser
-          .with_entries(user: @catch.user, at: @catch.captured_at_device)
+        rows = (@rows || Tournaments::ActiveForUser.with_entries(user: @catch.user, at: @catch.captured_at_device))
           .sort_by { |r| r[:entry].id }  # stable lock order across concurrent calls
         rows = rows.select { |r| r[:tournament].club_id == @club.id } if @club
         rows = rows.select { |r| @only_tournament_ids.include?(r[:tournament].id) } if @only_tournament_ids
@@ -146,14 +150,19 @@ module Catches
             # after that (a late offline sync, a science tag filled in from the
             # photo the next day) keeps its tag but earns no ticket: it was
             # never in the draw, and a fresh row would list it on the
-            # leaderboard as if it had been. A catch that already held a ticket
-            # here WAS in the draw, so a post-draw re-placement (the judge
-            # flows deactivate before re-placing: a GPS fix, a geofence
+            # leaderboard as if it had been. A catch that held a ticket WHEN
+            # THE DRAW RAN was in the draw, so a post-draw re-placement (the
+            # judge flows deactivate before re-placing: a GPS fix, a geofence
             # override, a DQ undone by reinstate) re-issues its ticket rather
             # than stripping it — the drawn winner's row must survive a
-            # correction to the winning fish.
+            # correction to the winning fish. A ticket still active, or
+            # retired after drawn_at, was in the pool; one retired before the
+            # draw (a pre-draw DQ reinstated the next day) was not, and a
+            # fresh row would list a fish the draw never saw. updated_at is
+            # the retirement stamp: see CatchPlacement.deactivate_all.
             if tournament.drawn_at.present?
-              next unless CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id).exists?
+              next unless CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id)
+                                        .where("active OR updated_at >= ?", tournament.drawn_at).exists?
             end
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1
             created << CatchPlacement.create!(

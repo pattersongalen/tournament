@@ -16,7 +16,7 @@
   %>
   <%= label_tag :species_id, "Species" %>
   <%= select_tag :species_id, options_for_select(species_options, @catch.species_id),
-                 data: { action: "change->tag-field#toggle" } %>
+                 data: { action: "change->tag-field#toggle", "tag-field-target": "species" } %>
 
   <%= label_tag :length, "Override length" %>
   <%= number_field_tag :length, prefill, step: step,

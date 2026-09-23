@@ -51,7 +51,7 @@ module Catches
         when :disqualify
           lock_entries!(@catch.catch_placements.active.pluck(:tournament_entry_id))
           freed = @catch.catch_placements.active.to_a
-          @catch.catch_placements.active.update_all(active: false)
+          @catch.catch_placements.active.deactivate_all
           @catch.update!(status: :disqualified)
           @notify_owner = true
           # No p.reload: the reconcile services re-query placements from the DB
@@ -115,10 +115,9 @@ module Catches
               # take them out of ascending order against a concurrent
               # PlaceInSlots (a deadlock).
               lock_touched_entries!
-              # One run scoped to the list: PlaceInSlots resolves the reachable
-              # tournaments itself, so a per-tournament call would repeat that
-              # lookup once per tagged tournament under the row lock held here.
-              ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club,
+              # One run scoped to the list, handed the rows already resolved
+              # above so nothing is looked up again under the row locks.
+              ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows,
                                            tournaments: tagged_rows.map { |r| r[:tournament] })
             end
           end
@@ -164,14 +163,13 @@ module Catches
             # ActiveForUser drops tournaments where the owner is now also a judge,
             # or whose window no longer covers captured_at_device. A stale placement
             # can still live in one of those, so union in every tournament where the
-            # catch currently holds an active placement. Keyed by entry id, so a
-            # tournament in both sets is reconciled once. reachable_rows already
-            # narrowed `eligible` to the editing club; narrow this half the same
-            # way so a per-club edit never reconciles another club's basket.
-            placed = @catch.catch_placements.active
+            # catch currently holds an active placement this edit may rebuild
+            # (rebuildable_placements: every one for a judge, the editing club's
+            # for a per-club edit — the same set lock_touched_entries! locks).
+            # Keyed by entry id, so a tournament in both sets is reconciled once.
+            placed = rebuildable_placements
               .includes(tournament_entry: :tournament)
               .map { |p| { tournament: p.tournament, entry: p.tournament_entry } }
-            placed = placed.select { |r| r[:tournament].club_id == @club.id } if @club
 
             rows = (eligible + placed).uniq { |r| r[:entry].id }
             rows.sort_by { |r| r[:entry].id }  # stable lock order
@@ -340,9 +338,11 @@ module Catches
       lock_touched_entries!
       active = rebuildable_placements
       freed = active.to_a
-      CatchPlacement.where(id: freed.map(&:id)).update_all(active: false)
+      CatchPlacement.where(id: freed.map(&:id)).deactivate_all
       freed.each { |p| ::Catches::ReconcileFreedSlot.call(placement: p) }
-      ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club)
+      # lock_touched_entries! already resolved reachable_rows; hand them over
+      # rather than have PlaceInSlots look them up again under the locks.
+      ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
     end
 
     def snapshot

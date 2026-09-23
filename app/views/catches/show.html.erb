@@ -194,7 +194,7 @@
       <label for="species_id" class="block text-xs text-slate-400">Species</label>
       <%= select_tag :species_id,
                      options_for_select(species_options, @catch.species_id),
-                     data: { action: "change->tag-field#toggle" },
+                     data: { action: "change->tag-field#toggle", "tag-field-target": "species" },
                      class: "w-full h-12 px-3 rounded-lg bg-slate-900 border border-slate-700 text-base text-slate-100" %>
 
       <label for="length" class="block text-xs text-slate-400">Length</label>

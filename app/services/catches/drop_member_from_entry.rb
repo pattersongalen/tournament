@@ -18,7 +18,7 @@ module Catches
         membership = @entry.tournament_entry_members.find_by(user_id: @user.id)
         membership&.destroy
         if freed.any?
-          ::CatchPlacement.where(id: freed.map(&:id)).update_all(active: false)
+          ::CatchPlacement.where(id: freed.map(&:id)).deactivate_all
           # No p.reload: the reconcile services re-query placements from the DB
           # (already updated above) and never read the in-memory p.active.
           freed.each { |p| ::Catches::ReconcileFreedSlot.call(placement: p) }

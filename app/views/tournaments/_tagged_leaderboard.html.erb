@@ -6,9 +6,27 @@
   winner_placement = tournament.drawn_winning_placement if tournament.drawn_at.present?
   winner_catch     = winner_placement&.catch
   winning_entry_id = winner_placement&.tournament_entry_id
+  # The drawn row can be retired after the draw (a DQ, a species correction
+  # to plain walleye). Check by catch, not by row: a GPS fix re-issues the
+  # ticket as a new row and the fish is still the winner.
+  winner_void = winner_catch && !tournament.catch_placements.active.exists?(catch_id: winner_catch.id)
+  can_draw    = current_user&.organizer_in?(tournament.club) && tournament.ended?
 %>
 <div id="leaderboard">
-  <% if winner_catch %>
+  <% if winner_void %>
+    <div class="bg-rose-900/30 border border-rose-700/40 rounded-lg p-4 mb-4">
+      <p class="text-sm text-rose-200 uppercase tracking-wide">Draw void</p>
+      <p class="text-rose-100 mt-1">
+        The drawn fish (<%= winner_catch.user.name %>, tag <%= winner_catch.tag_number %>)
+        no longer holds a ticket. An organizer needs to re-draw.
+      </p>
+    </div>
+    <% if can_draw %>
+      <%= button_to "Re-draw winner", draw_organizers_tournament_path(tournament, force: 1),
+                    method: :post, data: { turbo_confirm: "Re-roll the draw among the remaining tickets?" },
+                    class: "mb-4 inline-flex h-10 px-4 items-center justify-center rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold" %>
+    <% end %>
+  <% elsif winner_catch %>
     <div class="bg-amber-900/30 border border-amber-700/40 rounded-lg p-4 mb-4">
       <p class="text-sm text-amber-200 uppercase tracking-wide">Winner</p>
       <p class="text-xl text-amber-100 font-semibold mt-1">
@@ -33,7 +51,7 @@
     </div>
   <% end %>
 
-  <% if current_user&.organizer_in?(tournament.club) && tournament.ended? && tournament.drawn_at.nil? %>
+  <% if can_draw && tournament.drawn_at.nil? %>
     <%= button_to "Draw winner", draw_organizers_tournament_path(tournament),
                   method: :post, data: { turbo_confirm: "Run the draw now?" },
                   class: "mb-4 inline-flex h-10 px-4 items-center justify-center rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold" %>

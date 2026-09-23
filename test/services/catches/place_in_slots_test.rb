@@ -958,6 +958,34 @@ module Catches
     assert_equal [t], result[:affected_tournaments]
   end
 
+  test "tagged: a fish whose ticket was pulled before the draw earns no ticket after it" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    PlaceInSlots.call(catch: fish)
+    ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+
+    # Pulled from the pool (a DQ) an hour BEFORE the draw ran: the row exists,
+    # but the fish was not in the draw.
+    CatchPlacement.where(id: ticket.id).deactivate_all
+    ticket.update_column(:updated_at, 1.hour.ago)
+    t.update_columns(drawn_winning_placement_id: nil, drawn_at: 30.minutes.ago)
+
+    result = PlaceInSlots.call(catch: fish)
+
+    assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
+                 "a fish that was out of the pool when the winner was drawn must not get a ticket now"
+    assert_empty result[:affected_tournaments]
+  end
+
   test "tagged: new catch after a placement is deactivated does not collide on slot_index" do
     club = create(:club)
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")

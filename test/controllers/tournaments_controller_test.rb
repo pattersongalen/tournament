@@ -781,4 +781,36 @@ class TournamentsControllerTest < ActionDispatch::IntegrationTest
     assert_select "#leaderboard", text: /Winner/
     assert_match "Tagged Angler", response.body
   end
+
+  test "tagged leaderboard flags a drawn winner whose fish was pulled after the draw and offers a re-draw" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    organizer = create(:user, club: @club, role: :organizer)
+    angler = create(:user, club: @club, name: "Tagged Angler")
+    t = build(:tournament, club: @club, name: "Test Tagged", format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    enroll_user_in(t, user: angler)
+    fish = create(:catch, user: angler, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    Catches::PlaceInSlots.call(catch: fish)
+    Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: organizer)
+
+    # The winning fish turns out to be a plain walleye: its ticket is pulled.
+    walleye = create(:species, club: @club, name: "Walleye")
+    Catches::ApplyJudgeAction.call(tournament: nil, catch: fish, judge: organizer, action: :manual_override,
+                                   species_id: walleye.id, tag_number: "", note: "mis-ID", club: @club)
+
+    get tournament_path(t)
+    assert_response :success
+    assert_select "#leaderboard", text: /no longer holds a ticket/
+    assert_select "#leaderboard", text: /Winner\s+Tagged Angler/, count: 0
+    assert_select "form[action=?]", draw_organizers_tournament_path(t, force: 1), count: 0
+
+    delete session_path
+    post session_path, params: { email: organizer.email }
+    get consume_session_path(token: SignInToken.last.token)
+    get tournament_path(t)
+    assert_select "form[action=?] button", draw_organizers_tournament_path(t, force: 1), text: "Re-draw winner"
+  end
 end

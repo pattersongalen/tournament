@@ -63,6 +63,9 @@
             <p class="text-slate-300">
               Current winner: <span class="text-amber-200 font-semibold"><%= winner_catch.user.name %></span>
               &mdash; tag <span class="font-mono text-amber-200"><%= winner_catch.tag_number %></span>
+              <% unless @tournament.catch_placements.active.exists?(catch_id: winner_catch.id) %>
+                <span class="text-rose-300 font-semibold">&mdash; no longer holds a ticket, re-draw needed</span>
+              <% end %>
             </p>
             <p class="text-xs text-slate-500">
               Drawn <%= l(@tournament.drawn_at, format: :short) %>

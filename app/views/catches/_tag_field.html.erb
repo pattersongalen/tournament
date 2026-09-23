@@ -3,7 +3,9 @@
   manual override, and the inline override on the catch page). The enclosing
   form must carry `data-controller="tag-field"` with
   `tag_field_tagged_species_id_value`, and its species select must fire
-  `change->tag-field#toggle`, so the field shows only for Tagged Walleye.
+  `change->tag-field#toggle` and carry `data-tag-field-target="species"`, so
+  the field shows only for Tagged Walleye (re-checked on connect against the
+  browser-restored select value).
   Rendering it from ONE place keeps every editor able to satisfy (and clear)
   the model's tag-required rule in the same submit.
 %>

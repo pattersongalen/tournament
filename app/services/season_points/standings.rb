@@ -3,18 +3,16 @@ module SeasonPoints
     def self.call(club:, season_tag:)
       return [] if season_tag.nil?
 
-      # `club.tournaments.where(...)` returns an AssociationRelation, which
-      # sets the inverse association on every record it loads — so each
-      # tournament's `.club` below (called via SeasonPointsAwarded) is
-      # already populated and free. That's load-bearing: swapping this for
-      # `Tournament.where(club_id: ...)`, adding an `.unscope`, or a `.select`
-      # that drops the association would silently turn `tournament.club`
-      # into a per-tournament query again — no error, just a slow standings
-      # page. The N+1 guard test below is what catches that regression.
-      tournaments = club.tournaments
-        .where(awards_season_points: true, season_tag: season_tag)
-        .where("ends_at < ?", ::Time.current)
-        .to_a
+      # SeasonPoints::Tournaments builds on `club.tournaments.where(...)`, an
+      # AssociationRelation, which sets the inverse association on every
+      # record it loads — so each tournament's `.club` below (called via
+      # SeasonPointsAwarded) is already populated and free. That's
+      # load-bearing: swapping it for `Tournament.where(club_id: ...)`, adding
+      # an `.unscope`, or a `.select` that drops the association would
+      # silently turn `tournament.club` into a per-tournament query again —
+      # no error, just a slow standings page. The N+1 guard test below is
+      # what catches that regression.
+      tournaments = ::SeasonPoints::Tournaments.call(club: club, season_tag: season_tag).to_a
       return [] if tournaments.empty?
 
       tournament_ids = tournaments.map(&:id)
