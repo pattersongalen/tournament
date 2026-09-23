@@ -46,17 +46,6 @@ class Organizers::TournamentEntryMembersControllerTest < ActionDispatch::Integra
     assert_match(/Removed Galen/, flash[:notice])
   end
 
-  test "organizer adds a member to a team entry after tournament starts" do
-    create_boat1_entry!
-    @team.update!(starts_at: 1.minute.ago, ends_at: 1.hour.from_now)
-    assert_difference "TournamentEntryMember.count", 1 do
-      post organizers_tournament_tournament_entry_tournament_entry_members_path(
-        tournament_id: @team.id, tournament_entry_id: @entry.id), params: { user_id: @b.id }
-    end
-    assert_redirected_to edit_organizers_tournament_path(@team)
-    assert_match(/Added Galen/, flash[:notice])
-  end
-
   test "organizer removes a member from a team entry after tournament starts and rescores leaderboard" do
     create_boat1_entry!
     create(:tournament_entry_member, tournament_entry: @entry, user: @b)

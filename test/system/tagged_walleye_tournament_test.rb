@@ -1,112 +1,40 @@
 require "application_system_test_case"
 
+# The one browser-only behaviour left in the Tagged format: the catch form's
+# tag-number and weight inputs are revealed by JS when the Tagged Walleye
+# species is chosen, and hidden again for any other species. Everything else
+# the Tagged format renders (ticket counts, tag links, the draw) is server-side
+# HTML and is asserted in test/controllers/tournaments_controller_test.rb and
+# test/controllers/organizers/tournaments_controller_test.rb.
 class TaggedWalleyeTournamentTest < ApplicationSystemTestCase
   setup do
     @club = Club.first || create(:club)
-    @organizer = create(:user, club: @club, role: :organizer)
     @angler = create(:user, club: @club, role: :member, name: "Tagged Angler")
     @tagged = Species.find_or_create_by!(name: "Tagged Walleye")
     Species.find_or_create_by!(name: "Walleye") # so the species dropdown has another option
-
-    @t = build(:tournament, club: @club, format: :tagged, mode: :solo,
-               starts_at: 1.hour.ago, ends_at: 1.hour.from_now,
-               name: "Test Tagged")
-    @t.scoring_slots.build(species: @tagged, slot_count: 1)
-    @t.save!
-
-    @entry = create(:tournament_entry, tournament: @t)
-    create(:tournament_entry_member, tournament_entry: @entry, user: @angler)
   end
 
-  test "tag input appears when Tagged Walleye is selected and hides for other species" do
+  test "tag and weight inputs appear when Tagged Walleye is selected and hide for other species" do
     sign_in_as(@angler)
     visit new_catch_path
 
-    # Initially Walleye is the default; tag input hidden.
-    assert_no_selector "#catch_tag_number", visible: true
+    # Walleye is the default selection; both tag-only fields start hidden.
+    assert page.has_no_selector?("#catch_tag_number", visible: true, wait: 5),
+           "with Walleye selected: the tag-number input should be hidden"
+    assert page.has_no_selector?("#catch_weight_text", visible: true, wait: 5),
+           "with Walleye selected: the weight input should be hidden"
 
     select "Tagged Walleye", from: "catch_species_id"
-    assert_selector "#catch_tag_number", visible: true
+    assert page.has_selector?("#catch_tag_number", visible: true, wait: 5),
+           "after selecting Tagged Walleye: the tag-number input should be revealed"
+    assert page.has_selector?("#catch_weight_text", visible: true, wait: 5),
+           "after selecting Tagged Walleye: the weight input should be revealed"
 
     select "Walleye", from: "catch_species_id"
-    assert_no_selector "#catch_tag_number", visible: true
-  end
-
-  test "weight input appears with tag input, persists, and renders on show page" do
-    sign_in_as(@angler)
-    visit new_catch_path
-
-    # Initially Walleye is the default; weight input hidden along with the tag input.
-    assert_no_selector "#catch_weight_text", visible: true
-
-    select "Tagged Walleye", from: "catch_species_id"
-    assert_selector "#catch_weight_text", visible: true
-
-    # Direct-create the Catch since the form's submit flow uses the camera API,
-    # which the existing tag-related tests in this file deliberately avoid.
-    # The system-test value here is verifying the form reveal AND the show-page render.
-    c = create(:catch, user: @angler, species: @tagged, length_inches: 18.0,
-               tag_number: "A0001", weight_text: "4 lbs 3oz")
-
-    visit catch_path(c)
-    assert_text "Weight:"
-    assert_text "4 lbs 3oz"
-  end
-
-  test "leaderboard shows ticket count per angler" do
-    %w[A0001 A0002].each do |tag|
-      Catches::PlaceInSlots.call(
-        catch: create(:catch, user: @angler, species: @tagged, length_inches: 18.0,
-                      tag_number: tag, captured_at_device: 30.minutes.ago)
-      )
-    end
-
-    sign_in_as(@organizer)
-    visit tournament_path(@t)
-
-    assert_text "Tagged Angler"
-    rows = all("#leaderboard tbody tr")
-    assert_equal 1, rows.size
-    assert_match "2", rows.first.text   # ticket count
-    assert_match "A0001", rows.first.text
-    assert_match "A0002", rows.first.text
-  end
-
-  test "leaderboard tag numbers link to the catch photo modal for members" do
-    Catches::PlaceInSlots.call(
-      catch: create(:catch, user: @angler, species: @tagged, length_inches: 18.0,
-                    tag_number: "A0001", captured_at_device: 30.minutes.ago)
-    )
-
-    sign_in_as(@angler)
-    visit tournament_path(@t)
-
-    assert_selector "#leaderboard a[data-turbo-frame='catch_photo_modal']", text: "A0001"
-  end
-
-  test "organizer can draw a winner after tournament ends" do
-    Catches::PlaceInSlots.call(
-      catch: create(:catch, user: @angler, species: @tagged, length_inches: 18.0,
-                    tag_number: "A0001", captured_at_device: 30.minutes.ago)
-    )
-    @t.update_columns(starts_at: 2.hours.ago, ends_at: 1.hour.ago)
-
-    sign_in_as(@organizer)
-    visit tournament_path(@t)
-
-    accept_confirm do
-      click_button "Draw winner"
-    end
-
-    # The draw redirects to the organizer index; wait for that flash so the
-    # subsequent visit doesn't race the redirect, then navigate back to the
-    # tournament page where the winner highlight actually renders.
-    assert_text "Winner drawn."
-    visit tournament_path(@t)
-
-    assert_text "Tagged Angler"
-    assert_text "A0001"
-    assert_text(/winner/i)
+    assert page.has_no_selector?("#catch_tag_number", visible: true, wait: 5),
+           "after selecting Walleye again: the tag-number input should be hidden"
+    assert page.has_no_selector?("#catch_weight_text", visible: true, wait: 5),
+           "after selecting Walleye again: the weight input should be hidden"
   end
 
   private

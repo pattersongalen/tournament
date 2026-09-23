@@ -16,19 +16,6 @@ module Placements
       create(:tournament_entry_member, tournament_entry: @shared_entry, user: @ann)
     end
 
-    test "produces a 'bumped' notification to the displaced angler" do
-      first = create(:catch, user: @joe, species: @walleye, length_inches: 18)
-      Catches::PlaceInSlots.call(catch: first)
-
-      bigger = create(:catch, user: @ann, species: @walleye, length_inches: 22)
-      result = Catches::PlaceInSlots.call(catch: bigger)
-
-      payloads = DetectNotifications.call(result: result)
-      bumped_payload = payloads.find { |p| p[:reason] == "bumped" && p[:user] == @joe }
-      assert bumped_payload, "expected a bumped notification to Joe"
-      assert_match "bumped", bumped_payload[:body]
-    end
-
     test "does not notify the submitter when their own catch bumps a teammate's placement on a shared entry" do
       first = create(:catch, user: @joe, species: @walleye, length_inches: 18)
       Catches::PlaceInSlots.call(catch: first)

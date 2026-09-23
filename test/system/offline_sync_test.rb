@@ -21,53 +21,56 @@ class OfflineSyncTest < ApplicationSystemTestCase
     @walleye = create(:species, club: @club, name: "Walleye")
   end
 
-  test "pending IndexedDB catch uploads when visibilitychange fires" do
-    uuid = SecureRandom.uuid
+  # One drain trigger per assertion, each naming itself: the incident above is
+  # re-opened by losing any single trigger, so a failure has to say which one
+  # stopped draining.
+  test "every drain trigger uploads a pending IndexedDB catch" do
     sign_in_as(@user)
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id,
+
+    {
+      "visibilitychange (foregrounding the PWA)" =>
+        "document.dispatchEvent(new Event('visibilitychange'))",
+      "bsfamilies:try-sync (manual retry from the pending widget)" =>
+        "window.dispatchEvent(new Event('bsfamilies:try-sync'))",
+      # iOS back-navigation restores pages from the bfcache WITHOUT firing load —
+      # the drain trigger that covers normal arrivals. pageshow with persisted=true
+      # is the only signal those restores emit.
+      "pageshow persisted=true (iOS bfcache restore)" =>
+        "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))",
+      # Turbo Drive visits never fire load either — an angler who keeps browsing
+      # in-app after signal returns should not need to background the app to sync.
+      "turbo:load (in-app Turbo navigation)" =>
+        "document.dispatchEvent(new Event('turbo:load'))"
+    }.each do |trigger, trigger_js|
+      uuid = SecureRandom.uuid
+      seed_idb_catch(uuid: uuid, species_id: @walleye.id, trigger_js: trigger_js)
+      assert_catch_received(uuid, trigger)
+    end
+
+    # WebKit can report navigator.onLine === false on a device that is actually
+    # online (stale flag after backgrounding, standalone PWAs). The flag must be
+    # a hint at most — a drain trigger firing while onLine is wrongly false must
+    # still attempt the upload (the preflight fetch handles the truly-offline
+    # case by failing silently). The shim only lands on a fresh document, hence
+    # the revisit.
+    apply_ios_shims(extra_js: 'Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });')
+    visit root_path
+    stale_flag = SecureRandom.uuid
+    seed_idb_catch(uuid: stale_flag, species_id: @walleye.id,
                    trigger_js: "document.dispatchEvent(new Event('visibilitychange'))")
-    assert_catch_received(uuid)
-  end
+    assert_catch_received(stale_flag, "visibilitychange while navigator.onLine wrongly reports false")
 
-  test "pending IndexedDB catch uploads when bsfamilies:try-sync fires" do
-    uuid = SecureRandom.uuid
-    sign_in_as(@user)
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id,
-                   trigger_js: "window.dispatchEvent(new Event('bsfamilies:try-sync'))")
-    assert_catch_received(uuid)
-  end
-
-  # iOS back-navigation restores pages from the bfcache WITHOUT firing load —
-  # the drain trigger that covers normal arrivals. pageshow with persisted=true
-  # is the only signal those restores emit.
-  test "pending catch uploads when a bfcache restore fires pageshow" do
-    uuid = SecureRandom.uuid
-    sign_in_as(@user)
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id,
-                   trigger_js: "window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
-    assert_catch_received(uuid)
-  end
-
-  # Turbo Drive visits never fire load either — an angler who keeps browsing
-  # in-app after signal returns should not need to background the app to sync.
-  test "pending catch uploads on the next turbo:load navigation" do
-    uuid = SecureRandom.uuid
-    sign_in_as(@user)
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id,
-                   trigger_js: "document.dispatchEvent(new Event('turbo:load'))")
-    assert_catch_received(uuid)
-  end
-
-  # Safety net: if no lifecycle event ever fires (user sits on one screen with
-  # the app foregrounded, e.g. watching the leaderboard), a slow retry tick
-  # must eventually drain the queue. The tick period is overridable via
-  # window.__syncRetryMs so the test doesn't wait 45 real seconds.
-  test "pending catch uploads via the retry interval with no user action" do
-    uuid = SecureRandom.uuid
+    # Safety net: if no lifecycle event ever fires (user sits on one screen with
+    # the app foregrounded, e.g. watching the leaderboard), a slow retry tick
+    # must eventually drain the queue. The tick period is overridable via
+    # window.__syncRetryMs so the test doesn't wait 45 real seconds. This case
+    # runs LAST, behind its own revisit: a 300ms tick installed any earlier
+    # would drain the rows above and make their trigger assertions vacuous.
     apply_ios_shims(sync_retry_ms: 300)
-    sign_in_as(@user)
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id, trigger_js: "void 0")
-    assert_catch_received(uuid)
+    visit root_path
+    ticked = SecureRandom.uuid
+    seed_idb_catch(uuid: ticked, species_id: @walleye.id, trigger_js: "void 0")
+    assert_catch_received(ticked, "the retry interval with no user action")
   end
 
   # Safari evicts ALL script-writable storage (IndexedDB included) after ~7
@@ -179,11 +182,6 @@ class OfflineSyncTest < ApplicationSystemTestCase
     assert_nil Catch.find_by(client_uuid: uuid)
   end
 
-  # A real server 422 (Walleye's length cap is 50″ — MAX_LENGTH_BY_SPECIES in
-  # app/models/catch.rb) used to be shown to the angler as the raw response
-  # body: {"errors":["Length inches for Walleye can't exceed 50\""]}. sync.js
-  # must extract body.errors and join it into readable text before it ever
-  # reaches markFailed / the bsfamilies:catch-failed detail.
   # A server-wide blip (redeploy, reverse-proxy 502) backs every queued catch
   # off, and deferRetry escalates to a 15-minute floor. The server is usually
   # healthy again within a minute, but nothing shortens the wait: drainOnce
@@ -213,63 +211,45 @@ class OfflineSyncTest < ApplicationSystemTestCase
   # and so twenty full-photo re-uploads over lake cellular, which is the exact
   # battery/data drain deferRetry exists to prevent. A record already released
   # its budget's worth (clearBackoff's MAX_RELEASES) serves out its backoff.
-  test "a record that keeps failing stops being released by later successes" do
+  #
+  # The same budget is only worth having if a release is charged when it
+  # actually buys something. A parked row whose timer has ALREADY lapsed is due
+  # — its retry happens with or without clearBackoff — so charging it a release
+  # burns budget for nothing. Two such no-op charges exhaust MAX_RELEASES, and
+  # the next real outage's recovery then skips the row: the one fish on the
+  # phone that serves out its full backoff while the rest of the queue syncs.
+  test "the backoff release is spent only where it buys something" do
     control = SecureRandom.uuid
     spent = SecureRandom.uuid
+    lapsed = SecureRandom.uuid
     fresh = SecureRandom.uuid
     sign_in_as(@user)
-    # Both parked; both also held (hold_until) so they stay put in IndexedDB for
-    # inspection instead of racing an upload the moment they are released. The
-    # only difference is the release budget: the control has spent none, `spent`
-    # has spent all of clearBackoff's MAX_RELEASES.
-    held = { hold_until: "Date.now() + 600000", next_attempt_at: "Date.now() + 900000", attempts: 5 }
+    # All three parked rows are also held (hold_until) so they stay put in
+    # IndexedDB for inspection instead of racing an upload the moment they are
+    # released. They differ only in what should disqualify them: `spent` has
+    # spent all of clearBackoff's MAX_RELEASES, `lapsed`'s timer is already up,
+    # and the control has a live timer and a full budget.
+    held = { hold_until: "Date.now() + 600000", attempts: 5 }
+    running = held.merge(next_attempt_at: "Date.now() + 900000")
     seed_idb_catch(uuid: control, species_id: @walleye.id, trigger_js: "void 0",
-                   extra_fields: held)
+                   extra_fields: running)
     seed_idb_catch(uuid: spent, species_id: @walleye.id, trigger_js: "void 0",
-                   extra_fields: held.merge(releases: 2))
+                   extra_fields: running.merge(releases: 2))
+    seed_idb_catch(uuid: lapsed, species_id: @walleye.id, trigger_js: "void 0",
+                   extra_fields: held.merge(next_attempt_at: "Date.now() - 1000"))
     seed_idb_catch(uuid: fresh, species_id: @walleye.id,
                    trigger_js: "window.dispatchEvent(new Event('bsfamilies:try-sync'))")
 
     assert_catch_received(fresh)
     # The control losing its timer is clearBackoff reporting for duty — wait on
-    # that rather than a sleep, so the assertion below can't run too early.
+    # that rather than a sleep, so the assertions below can't run too early.
     Timeout.timeout(10) do
       sleep 0.1 while idb_next_attempt_at(control)
     end
     assert idb_next_attempt_at(spent),
-           "a record that already spent its release budget must serve out its backoff"
-  end
-
-  # The budget above only makes sense if a release is charged when it actually
-  # buys something. A parked row whose timer has ALREADY lapsed is due — its
-  # retry happens with or without clearBackoff — so charging it a release burns
-  # budget for nothing. Two such no-op charges exhaust MAX_RELEASES, and the
-  # next real outage's recovery then skips the row: the one fish on the phone
-  # that serves out its full backoff while the rest of the queue syncs.
-  test "a parked record whose timer already lapsed is not charged a release" do
-    lapsed = SecureRandom.uuid
-    control = SecureRandom.uuid
-    fresh = SecureRandom.uuid
-    sign_in_as(@user)
-    # Both parked and held (hold_until) so they stay inspectable in IndexedDB
-    # instead of uploading the moment they are due. The only difference is the
-    # timer: the control's is still running, `lapsed`'s has already expired.
-    held = { hold_until: "Date.now() + 600000", attempts: 5 }
-    seed_idb_catch(uuid: lapsed, species_id: @walleye.id, trigger_js: "void 0",
-                   extra_fields: held.merge(next_attempt_at: "Date.now() - 1000"))
-    seed_idb_catch(uuid: control, species_id: @walleye.id, trigger_js: "void 0",
-                   extra_fields: held.merge(next_attempt_at: "Date.now() + 900000"))
-    seed_idb_catch(uuid: fresh, species_id: @walleye.id,
-                   trigger_js: "window.dispatchEvent(new Event('bsfamilies:try-sync'))")
-
-    assert_catch_received(fresh)
-    # The control losing its timer is clearBackoff reporting for duty — wait on
-    # that rather than a sleep, so the assertion below can't run too early.
-    Timeout.timeout(10) do
-      sleep 0.1 while idb_next_attempt_at(control)
-    end
+           "spent budget: a record that already spent its release budget must serve out its backoff"
     assert idb_next_attempt_at(lapsed),
-           "an already-due record must be left alone (its stale timer intact), not released"
+           "already due: an already-due record must be left alone (its stale timer intact), not released"
   end
 
   # offline/db.js bumps its schema version as the queue format changes, and an
@@ -345,26 +325,67 @@ class OfflineSyncTest < ApplicationSystemTestCase
     assert probe["joined_read_has_photo"], "getCatch must still hand the uploader its bytes"
   end
 
-  test "a server 422 shows a readable reason, not raw JSON" do
-    uuid = SecureRandom.uuid
+  # One drain, three record shapes that have each broken on their own:
+  #
+  #   - A real server 422 (Walleye's length cap is 50" — MAX_LENGTH_BY_SPECIES
+  #     in app/models/catch.rb) used to be shown to the angler as the raw
+  #     response body: {"errors":["Length inches for Walleye can't exceed 50\""]}.
+  #     sync.js must extract body.errors and join it into readable text before
+  #     it ever reaches markFailed / the bsfamilies:catch-failed detail.
+  #   - Synced rows used to be kept forever with their full photo/video blobs —
+  #     unbounded IndexedDB growth is what invites iOS storage-pressure
+  #     eviction, and eviction takes genuinely-pending catches with it. Rows
+  #     left behind in status "synced" by the pre-fix code must be swept even
+  #     though nothing new synced them.
+  #   - New-format records store raw bytes (ArrayBuffer) instead of a Blob —
+  #     ArrayBuffers serialize INLINE in the IndexedDB record, sidestepping
+  #     WebKit's file-backed-blob bug entirely. sync.js must upload these.
+  #     (The Blob-photo tests above double as the legacy-record regression guard.)
+  test "one drain rejects readably, prunes legacy synced rows, and uploads bytes records" do
+    rejected = SecureRandom.uuid
+    legacy = SecureRandom.uuid
+    bytes = SecureRandom.uuid
     sign_in_as(@user)
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id, length_inches: "60",
+    seed_idb_catch(uuid: rejected, species_id: @walleye.id, length_inches: "60",
+                   trigger_js: "void 0")
+    seed_idb_catch(uuid: legacy, species_id: @walleye.id, status: "synced",
+                   trigger_js: "void 0")
+    seed_idb_catch(uuid: bytes, species_id: @walleye.id,
+                   photo_js: IosWebQuirks::BYTES_PHOTO_JS,
                    trigger_js: "window.dispatchEvent(new Event('bsfamilies:try-sync'))")
 
-    assert_selector "[data-pending-catches-target='failedList'] li", wait: 5
-    assert_text(/can't exceed/, wait: 5)
-    assert_no_text('{"errors"')
-    assert_no_text('"errors":')
-    assert_nil Catch.find_by(client_uuid: uuid)
+    assert_catch_received(bytes, "a bytes-format (ArrayBuffer photo) record")
+    assert_idb_row_gone(bytes)
+
+    assert page.has_selector?("[data-pending-catches-target='failedList'] li", wait: 5),
+           "server 422: the rejected catch must show up in the failed list"
+    assert page.has_text?(/can't exceed/, wait: 5),
+           "server 422: the reason must be the server's readable message"
+    assert page.has_no_text?('{"errors"'), "server 422: the raw JSON body must not be shown"
+    assert page.has_no_text?('"errors":'), "server 422: the raw JSON body must not be shown"
+    assert_nil Catch.find_by(client_uuid: rejected), "server 422: nothing may be persisted"
+
+    assert_idb_row_gone(legacy)
+    assert_nil Catch.find_by(client_uuid: legacy),
+               "legacy synced row: must be pruned, not re-POSTed"
   end
 
   # A 4xx that doesn't come from the Rails API — a reverse-proxy 413 for an
   # oversized photo is the realistic case — has an HTML body. resp.json()
   # fails, and the old fallback rendered the reason as literally "{}". The
-  # widget must show a readable message instead.
-  test "a non-JSON 4xx shows a readable reason, not {}" do
-    uuid = SecureRandom.uuid
+  # widget must show a readable message instead. The successful upload runs
+  # first, on the real fetch: once the server owns the catch, the local row
+  # must go (unbounded IndexedDB growth invites iOS eviction).
+  test "a success clears its row and a non-JSON 4xx shows a readable reason" do
+    synced = SecureRandom.uuid
+    oversized = SecureRandom.uuid
     sign_in_as(@user)
+
+    seed_idb_catch(uuid: synced, species_id: @walleye.id,
+                   trigger_js: "window.dispatchEvent(new Event('bsfamilies:try-sync'))")
+    assert_catch_received(synced, "a successful upload")
+    assert_idb_row_gone(synced)
+
     page.execute_script <<~JS
       const realFetch = window.fetch;
       window.fetch = (url, opts) => {
@@ -375,81 +396,37 @@ class OfflineSyncTest < ApplicationSystemTestCase
         return realFetch(url, opts);
       };
     JS
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id,
+    seed_idb_catch(uuid: oversized, species_id: @walleye.id,
                    trigger_js: "window.dispatchEvent(new Event('bsfamilies:try-sync'))")
 
-    assert_selector "[data-pending-catches-target='failedList'] li", wait: 5
-    assert_text(/upload failed \(server error 413\)/i, wait: 5)
-    assert_no_text "{}"
-    assert_nil Catch.find_by(client_uuid: uuid)
-  end
-
-  # Synced rows used to be kept forever with their full photo/video blobs —
-  # unbounded IndexedDB growth is what invites iOS storage-pressure eviction,
-  # and eviction takes genuinely-pending catches with it. Once the server owns
-  # the catch, the local row must go.
-  test "a successfully synced catch is deleted from IndexedDB" do
-    uuid = SecureRandom.uuid
-    sign_in_as(@user)
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id,
-                   trigger_js: "window.dispatchEvent(new Event('bsfamilies:try-sync'))")
-    assert_catch_received(uuid)
-    assert_idb_row_gone(uuid)
-  end
-
-  test "legacy synced rows are pruned when the queue drains" do
-    uuid = SecureRandom.uuid
-    sign_in_as(@user)
-    # Seed a row already in status "synced" (as the pre-fix code left behind),
-    # then trigger a drain — it must be swept even though nothing new synced.
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id, status: "synced",
-                   trigger_js: "window.dispatchEvent(new Event('bsfamilies:try-sync'))")
-    assert_idb_row_gone(uuid)
-    assert_nil Catch.find_by(client_uuid: uuid), "a legacy synced row must be pruned, not re-POSTed"
-  end
-
-  # New-format records store raw bytes (ArrayBuffer) instead of a Blob —
-  # ArrayBuffers serialize INLINE in the IndexedDB record, sidestepping
-  # WebKit's file-backed-blob bug entirely. sync.js must upload these.
-  # (The Blob-photo tests above double as the legacy-record regression guard.)
-  test "a bytes-format record (ArrayBuffer photo) uploads on drain" do
-    uuid = SecureRandom.uuid
-    sign_in_as(@user)
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id,
-                   photo_js: IosWebQuirks::BYTES_PHOTO_JS,
-                   trigger_js: "window.dispatchEvent(new Event('bsfamilies:try-sync'))")
-    assert_catch_received(uuid)
-    assert_idb_row_gone(uuid)
-  end
-
-  # WebKit can report navigator.onLine === false on a device that is actually
-  # online (stale flag after backgrounding, standalone PWAs). The flag must be
-  # a hint at most — a drain trigger firing while onLine is wrongly false must
-  # still attempt the upload (the preflight fetch handles the truly-offline
-  # case by failing silently).
-  test "pending catch uploads even when navigator.onLine reports false" do
-    uuid = SecureRandom.uuid
-    apply_ios_shims(extra_js: 'Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });')
-    sign_in_as(@user)
-    seed_idb_catch(uuid: uuid, species_id: @walleye.id,
-                   trigger_js: "document.dispatchEvent(new Event('visibilitychange'))")
-    assert_catch_received(uuid)
+    assert page.has_selector?("[data-pending-catches-target='failedList'] li", wait: 5),
+           "non-JSON 4xx: the rejected catch must show up in the failed list"
+    assert page.has_text?(/upload failed \(server error 413\)/i, wait: 5),
+           "non-JSON 4xx: the reason must be readable"
+    assert page.has_no_text?("{}"), "non-JSON 4xx: the reason must not render as {}"
+    assert_nil Catch.find_by(client_uuid: oversized), "non-JSON 4xx: nothing may be persisted"
   end
 
   private
 
-  def assert_catch_received(uuid)
+  # label names the case under test so a merged run says which drain trigger
+  # (or record shape) stopped working.
+  def assert_catch_received(uuid, label = "the drain trigger")
     catch_record = nil
-    Timeout.timeout(15) do
-      loop do
-        catch_record = Catch.find_by(client_uuid: uuid)
-        break if catch_record
-        sleep 0.2
+    begin
+      Timeout.timeout(15) do
+        loop do
+          catch_record = Catch.find_by(client_uuid: uuid)
+          break if catch_record
+          sleep 0.2
+        end
       end
+    rescue Timeout::Error
+      # Fall through: the assertion below names the case that never arrived.
     end
 
-    assert catch_record, "expected the server to receive the queued catch via the drain trigger"
-    assert_equal @user.id, catch_record.user_id
-    assert_equal 18, catch_record.length_inches.to_i
+    assert catch_record, "expected the server to receive the queued catch via #{label}"
+    assert_equal @user.id, catch_record.user_id, "#{label}: uploaded under the wrong user"
+    assert_equal 18, catch_record.length_inches.to_i, "#{label}: uploaded the wrong length"
   end
 end

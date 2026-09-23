@@ -13,17 +13,9 @@ class Admin::Clubs::CatchesControllerTest < ActionDispatch::IntegrationTest
     @foreign_catch = create(:catch, user: @foreign_member, length_inches: 19.0)
   end
 
-  test "signed-out user redirects to sign-in" do
-    get admin_club_catches_path(@foreign_club)
-    assert_redirected_to new_session_path
-  end
-
-  test "non-admin member is forbidden" do
-    sign_in_as(@member)
-    get admin_club_catches_path(@foreign_club)
-    assert_response :forbidden
-  end
-
+  # Shares Admin::Clubs::BaseController with Members/Tournaments, which carry the
+  # full signed-out + non-admin gate coverage; this is a smoke that the same
+  # class-level before_actions apply here too.
   test "non-admin organizer is forbidden" do
     sign_in_as(@organizer)
     get admin_club_catches_path(@foreign_club)

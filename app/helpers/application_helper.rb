@@ -20,9 +20,16 @@ module ApplicationHelper
     end
   end
 
+  # The base_ladder scheme rounds multiplier results to 2 dp (see
+  # Tournaments::PointsScale#scaled_base_ladder), so a night can genuinely
+  # pay 3.75 points. Formatting at 1 dp silently truncated those to 3.8,
+  # which no longer summed to a member's own total on the standings page.
+  # 2-dp-with-trim is a superset of the old 1-dp-with-trim output for every
+  # value that only ever had at most 1 decimal place, so this doesn't change
+  # how whole numbers or halves render. Mirrors Club#format_points_amount,
+  # which does the same job for ladder text fields.
   def format_season_points(n)
-    formatted = format("%.1f", n)
-    formatted.end_with?(".0") ? formatted.chomp(".0") : formatted
+    SeasonPoints::FormatAmount.call(n)
   end
 
   BANNER_STRIP_CLASSES = {

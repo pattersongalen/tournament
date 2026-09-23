@@ -30,26 +30,18 @@ class Catches::ApplyFiltersTest < ActiveSupport::TestCase
     refute_includes result, b
   end
 
-  test "lake filter: known key matches stored lake" do
-    a = create(:catch, user: @user, species: @walleye, length_inches: 18, lake: "boundary_dam", captured_at_device: 1.day.ago)
-    b = create(:catch, user: @user, species: @walleye, length_inches: 18, lake: nil,            captured_at_device: 1.day.ago)
-    result = call(lake: "boundary_dam")
-    assert_includes result, a
-    refute_includes result, b
-  end
+  test "lake param selects the matching catches" do
+    dam_catch  = create(:catch, user: @user, species: @walleye, length_inches: 18, lake: "boundary_dam", captured_at_device: 1.day.ago)
+    null_catch = create(:catch, user: @user, species: @walleye, length_inches: 18, lake: nil,            captured_at_device: 1.day.ago)
 
-  test "lake filter: 'other' matches NULL lake" do
-    a = create(:catch, user: @user, species: @walleye, length_inches: 18, lake: "boundary_dam", captured_at_device: 1.day.ago)
-    b = create(:catch, user: @user, species: @walleye, length_inches: 18, lake: nil,            captured_at_device: 1.day.ago)
-    result = call(lake: "other")
-    refute_includes result, a
-    assert_includes result, b
-  end
-
-  test "lake filter: unknown key is ignored" do
-    a = create(:catch, user: @user, species: @walleye, length_inches: 18, lake: "boundary_dam", captured_at_device: 1.day.ago)
-    result = call(lake: "neverland")
-    assert_includes result, a
+    {
+      "boundary_dam" => [dam_catch],
+      "other"        => [null_catch],
+      "neverland"    => [dam_catch, null_catch] # unknown key is ignored -> all lakes
+    }.each do |lake, expected|
+      result = call(lake: lake)
+      assert_equal expected.sort_by(&:id), result.to_a.sort_by(&:id), "lake=#{lake}"
+    end
   end
 
   test "date range filter: start and end bound captured_at_device" do
@@ -62,48 +54,37 @@ class Catches::ApplyFiltersTest < ActiveSupport::TestCase
     refute_includes result, too_late
   end
 
-  test "min_length excludes shorter catches" do
+  test "min_length filters by inclusive lower bound, ignoring blank/zero" do
     short = create(:catch, user: @user, species: @walleye, length_inches: 12, captured_at_device: 1.day.ago)
-    long  = create(:catch, user: @user, species: @walleye, length_inches: 22, captured_at_device: 1.day.ago)
-    result = call(min_length: "18")
-    refute_includes result, short
-    assert_includes result, long
-  end
-
-  test "min_length boundary is inclusive" do
     exact = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago)
-    result = call(min_length: "18")
-    assert_includes result, exact
+    long  = create(:catch, user: @user, species: @walleye, length_inches: 22, captured_at_device: 1.day.ago)
+
+    {
+      "18" => [exact, long],        # boundary inclusive, excludes shorter
+      ""   => [short, exact, long], # blank ignored
+      "0"  => [short, exact, long]  # zero ignored
+    }.each do |min_length, expected|
+      result = call(min_length: min_length)
+      assert_equal expected.sort_by(&:id), result.to_a.sort_by(&:id), "min_length=#{min_length.inspect}"
+    end
   end
 
-  test "min_length: blank or zero is ignored" do
-    short = create(:catch, user: @user, species: @walleye, length_inches: 12, captured_at_device: 1.day.ago)
-    assert_includes call(min_length: ""),  short
-    assert_includes call(min_length: "0"), short
-  end
-
-  test "month filter matches that month across years" do
+  test "month filter matches that month across years and ignores invalid values or a date range" do
     may_2024 = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: Time.zone.local(2024, 5, 10, 9))
     may_2025 = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: Time.zone.local(2025, 5, 10, 9))
     jun_2025 = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: Time.zone.local(2025, 6, 10, 9))
+
     result = call(month: "5")
-    assert_includes result, may_2024
-    assert_includes result, may_2025
-    refute_includes result, jun_2025
-  end
+    assert_includes result, may_2024, "month=5 matches 2024"
+    assert_includes result, may_2025, "month=5 matches 2025"
+    refute_includes result, jun_2025, "month=5 excludes June"
 
-  test "month filter overrides start/end date range" do
-    may = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: Time.zone.local(2024, 5, 10, 9))
-    # date range would normally exclude 2024
-    result = call(month: "5", start: "2026-01-01", end: "2026-12-31")
-    assert_includes result, may
-  end
+    # date range would normally exclude 2024; month overrides it
+    assert_includes call(month: "5", start: "2026-01-01", end: "2026-12-31"), may_2024, "month overrides start/end"
 
-  test "month filter ignores out-of-range values" do
-    may = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: Time.zone.local(2025, 5, 10, 9))
-    assert_includes call(month: "0"),  may
-    assert_includes call(month: "13"), may
-    assert_includes call(month: ""),   may
+    ["0", "13", ""].each do |bad_month|
+      assert_includes call(month: bad_month), may_2025, "month=#{bad_month.inspect} out-of-range is ignored"
+    end
   end
 
   test "month filter buckets late-evening catches by local time, not UTC" do
@@ -115,34 +96,30 @@ class Catches::ApplyFiltersTest < ActiveSupport::TestCase
     assert_includes result, late_may
   end
 
-  test "wind_dir NE matches [22.5, 67.5)" do
-    inside  = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: 45)
-    edge_lo = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: 22.5)
-    edge_hi = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: 67.5)
-    outside = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: 80)
-    nilled  = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: nil)
-    result = call(wind_dir: "ne")
-    assert_includes result, inside
-    assert_includes result, edge_lo
-    refute_includes result, edge_hi  # 67.5 belongs to E (next cardinal)
-    refute_includes result, outside
-    refute_includes result, nilled
-  end
-
-  test "wind_dir N wraps across 0/360" do
-    near_360 = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: 350)
-    near_0   = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: 10)
-    away     = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: 100)
-    result = call(wind_dir: "n")
-    assert_includes result, near_360
-    assert_includes result, near_0
-    refute_includes result, away
-  end
-
-  test "wind_dir boundary at 22.5 belongs to NE only, not N" do
-    edge = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: 22.5)
-    assert_includes call(wind_dir: "ne"), edge
-    refute_includes call(wind_dir: "n"),  edge
+  test "wind_dir bands select catches by compass sector (boundaries half-open, wraps 0/360)" do
+    cases = {
+      45   => { ne: true,  n: false },  # inside NE
+      22.5 => { ne: true,  n: false },  # NE lower bound inclusive
+      67.5 => { ne: false, n: false },  # NE upper bound exclusive -> belongs to E
+      80   => { ne: false, n: false },
+      350  => { ne: false, n: true  },  # N wraps across 0/360
+      10   => { ne: false, n: true  },
+      100  => { ne: false, n: false },
+      nil  => { ne: false, n: false }   # missing direction never matches
+    }
+    cases.each do |deg, expect|
+      c = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_direction_deg: deg)
+      if expect[:ne]
+        assert_includes call(wind_dir: "ne"), c, "#{deg.inspect}deg should be in NE"
+      else
+        refute_includes call(wind_dir: "ne"), c, "#{deg.inspect}deg should not be in NE"
+      end
+      if expect[:n]
+        assert_includes call(wind_dir: "n"), c, "#{deg.inspect}deg should be in N"
+      else
+        refute_includes call(wind_dir: "n"), c, "#{deg.inspect}deg should not be in N"
+      end
+    end
   end
 
   test "wind_dir: unknown value ignored" do
@@ -187,10 +164,12 @@ class Catches::ApplyFiltersTest < ActiveSupport::TestCase
     end
   end
 
-  test "wind_speed/pressure: NULL columns excluded when filter active" do
-    nilled = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, wind_speed_kph: nil, barometric_pressure_hpa: nil)
-    refute_includes call(wind_speed: "calm"), nilled
-    refute_includes call(pressure: "low"),    nilled
+  test "NULL condition columns are excluded when that filter is active" do
+    nilled = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago,
+                            wind_speed_kph: nil, barometric_pressure_hpa: nil, moon_phase_fraction: nil)
+    refute_includes call(wind_speed: "calm"), nilled, "wind_speed"
+    refute_includes call(pressure: "low"),    nilled, "pressure"
+    refute_includes call(moon: "full"),       nilled, "moon"
   end
 
   test "moon bands select catches by phase fraction (q1 top-exclusive, new wraps 0/1)" do
@@ -209,11 +188,6 @@ class Catches::ApplyFiltersTest < ActiveSupport::TestCase
         refute_includes call(moon: band), c, "#{band}: #{frac} should not match"
       end
     end
-  end
-
-  test "moon: NULL fraction excluded when filter active" do
-    nilled = create(:catch, user: @user, species: @walleye, length_inches: 18, captured_at_device: 1.day.ago, moon_phase_fraction: nil)
-    refute_includes call(moon: "full"), nilled
   end
 
   test "tod bands select catches by hour-of-day range (night wraps midnight)" do
@@ -235,36 +209,28 @@ class Catches::ApplyFiltersTest < ActiveSupport::TestCase
     end
   end
 
-  test "active_filter_keys: empty when no condition params" do
-    assert_empty Catches::ApplyFilters.active_filter_keys(ActionController::Parameters.new)
+  test "active_filter_keys returns only keys with valid values" do
+    {
+      ActionController::Parameters.new => [],
+      ActionController::Parameters.new(month: "13", wind_dir: "up", wind_speed: "hurricane",
+                                        pressure: "very_low", moon: "halfmoon", tod: "afternoon") => [],
+      ActionController::Parameters.new(month: "5", wind_dir: "ne", moon: "halfmoon", pressure: "low", tod: "noon") =>
+        %i[month wind_dir pressure tod]
+    }.each do |params, expected|
+      assert_equal expected, Catches::ApplyFilters.active_filter_keys(params), "params=#{params.to_unsafe_h}"
+    end
   end
 
-  test "active_filter_keys: rejects invalid values that the service would silently ignore" do
-    params = ActionController::Parameters.new(
-      month: "13", wind_dir: "up", wind_speed: "hurricane",
-      pressure: "very_low", moon: "halfmoon", tod: "afternoon"
-    )
-    assert_empty Catches::ApplyFilters.active_filter_keys(params)
-  end
-
-  test "active_filter_keys: returns the subset with valid values" do
-    params = ActionController::Parameters.new(
-      month: "5", wind_dir: "ne", moon: "halfmoon", pressure: "low", tod: "noon"
-    )
-    assert_equal %i[month wind_dir pressure tod], Catches::ApplyFilters.active_filter_keys(params)
-  end
-
-  test "parse_date: blank in, nil out" do
-    assert_nil Catches::ApplyFilters.parse_date(nil)
-    assert_nil Catches::ApplyFilters.parse_date("")
-  end
-
-  test "parse_date: unparseable strings return nil without raising" do
-    assert_nil Catches::ApplyFilters.parse_date("banana")
-  end
-
-  test "parse_date: valid ISO date round-trips" do
-    assert_equal Date.new(2026, 5, 17), Catches::ApplyFilters.parse_date("2026-05-17")
+  test "parse_date parses ISO dates and returns nil for anything unparseable" do
+    {
+      nil          => nil,
+      ""           => nil,
+      "banana"     => nil,
+      "2026-05-17" => Date.new(2026, 5, 17)
+    }.each do |input, expected|
+      actual = Catches::ApplyFilters.parse_date(input)
+      expected.nil? ? assert_nil(actual, "input=#{input.inspect}") : assert_equal(expected, actual, "input=#{input.inspect}")
+    end
   end
 
   test "filters AND together: only catches matching every active filter survive" do

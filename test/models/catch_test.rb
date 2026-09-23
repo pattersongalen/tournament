@@ -7,18 +7,11 @@ class CatchTest < ActiveSupport::TestCase
     @walleye = create(:species, club: @club, name: "Walleye")
   end
 
-  test "requires user, species, length_inches, captured_at_device" do
-    assert_not Catch.new.valid?
-  end
-
-  test "length must be positive" do
-    catch_record = build(:catch, user: @user, species: @walleye, length_inches: 0)
-    assert_not catch_record.valid?
-  end
-
-  test "status defaults to synced (no offline in this phase)" do
-    catch_record = create(:catch, user: @user, species: @walleye)
-    assert catch_record.synced?
+  test "a catch requires its core fields and a positive length" do
+    assert_not Catch.new.valid?,
+               "a blank catch (no user, species, length_inches, captured_at_device) should be invalid"
+    assert_not build(:catch, user: @user, species: @walleye, length_inches: 0).valid?,
+               "a zero length should be invalid"
   end
 
   test "client_uuid must be unique" do
@@ -27,17 +20,12 @@ class CatchTest < ActiveSupport::TestCase
     assert_not duplicate.valid?
   end
 
-  test "add_flag! appends the flag" do
+  test "add_flag! appends the flag and is idempotent" do
     catch_record = create(:catch, user: @user, species: @walleye)
     catch_record.add_flag!("imported_photo")
-    assert_includes catch_record.reload.flags, "imported_photo"
-  end
-
-  test "add_flag! is idempotent" do
-    catch_record = create(:catch, user: @user, species: @walleye)
+    assert_includes catch_record.reload.flags, "imported_photo", "first add appends the flag"
     catch_record.add_flag!("imported_photo")
-    catch_record.add_flag!("imported_photo")
-    assert_equal ["imported_photo"], catch_record.reload.flags
+    assert_equal ["imported_photo"], catch_record.reload.flags, "a repeat add must not duplicate the flag"
   end
 
   test "add_flag! does not clobber a flag added concurrently after the instance was loaded" do
@@ -49,103 +37,77 @@ class CatchTest < ActiveSupport::TestCase
     assert_equal %w[possible_duplicate imported_photo].sort, catch_record.reload.flags.sort
   end
 
-  test "add_flag! with bump_to_review moves a synced catch to needs_review" do
-    catch_record = create(:catch, user: @user, species: @walleye, status: :synced)
-    catch_record.add_flag!("imported_photo", bump_to_review: true)
-    assert catch_record.reload.needs_review?
+  test "add_flag! with bump_to_review only moves a synced catch to needs_review" do
+    { "synced" => "needs_review", "disqualified" => "disqualified" }.each do |start_status, expected|
+      catch_record = create(:catch, user: @user, species: @walleye, status: start_status)
+      catch_record.add_flag!("imported_photo", bump_to_review: true)
+      assert_equal expected, catch_record.reload.status, "starting from #{start_status}"
+    end
   end
 
-  test "add_flag! with bump_to_review leaves a non-synced catch's status untouched" do
-    catch_record = create(:catch, user: @user, species: @walleye, status: :disqualified)
-    catch_record.add_flag!("imported_photo", bump_to_review: true)
-    assert catch_record.reload.disqualified?
-  end
-
-  test "can attach a photo" do
-    catch_record = build(:catch, user: @user, species: @walleye)
-    catch_record.photo.attach(
-      io: File.open(Rails.root.join("test/fixtures/files/sample_walleye.jpg")),
-      filename: "sample_walleye.jpg",
-      content_type: "image/jpeg"
-    )
-    assert catch_record.save
-    assert catch_record.photo.attached?
-  end
-
-  test "display_photo returns the original photo when no reference photo is attached" do
+  test "display_photo prefers the reference photo and falls back to the original" do
     catch_record = build(:catch, user: @user, species: @walleye)
     catch_record.photo.attach(
       io: File.open(Rails.root.join("test/fixtures/files/sample_walleye.jpg")),
       filename: "original.jpg", content_type: "image/jpeg"
     )
     catch_record.save!
-    assert_equal catch_record.photo.blob, catch_record.display_photo.blob
-  end
+    assert catch_record.photo.attached?, "the submission photo attaches and saves"
+    assert_equal catch_record.photo.blob, catch_record.display_photo.blob,
+                 "with no reference photo attached the original is shown"
 
-  test "display_photo returns the reference photo when one is attached" do
-    catch_record = build(:catch, user: @user, species: @walleye)
-    catch_record.photo.attach(
-      io: File.open(Rails.root.join("test/fixtures/files/sample_walleye.jpg")),
-      filename: "original.jpg", content_type: "image/jpeg"
-    )
     catch_record.reference_photo.attach(
       io: File.open(Rails.root.join("test/fixtures/files/sample_walleye.jpg")),
       filename: "reference.jpg", content_type: "image/jpeg"
     )
     catch_record.save!
-    assert_equal "reference.jpg", catch_record.display_photo.blob.filename.to_s
+    assert_equal "reference.jpg", catch_record.display_photo.blob.filename.to_s,
+                 "an attached reference photo wins over the original"
   end
 
-  test "rejects a non-image photo content_type" do
-    catch_record = build(:catch, user: @user, species: @walleye)
-    catch_record.photo.attach(
-      io: StringIO.new("not really an image"),
-      filename: "evil.txt",
-      content_type: "text/plain"
-    )
-    assert_not catch_record.valid?
-    assert_includes catch_record.errors[:photo].join, "JPEG"
+  test "photo attachments outside the allowed type and size are rejected" do
+    [
+      ["a non-image content_type",
+       { io: StringIO.new("not really an image"), filename: "evil.txt", content_type: "text/plain" },
+       "JPEG"],
+      ["a photo larger than the byte cap",
+       { io: StringIO.new("x" * (Catch::PHOTO_MAX_BYTES + 1)), filename: "huge.jpg", content_type: "image/jpeg" },
+       "larger"]
+    ].each do |label, upload, message|
+      catch_record = build(:catch, user: @user, species: @walleye)
+      catch_record.photo.attach(**upload)
+      assert_not catch_record.valid?, "#{label} should be invalid"
+      assert_includes catch_record.errors[:photo].join, message, "#{label}: error text"
+    end
   end
 
-  test "rejects a photo larger than the byte cap" do
-    catch_record = build(:catch, user: @user, species: @walleye)
-    catch_record.photo.attach(
-      io: StringIO.new("x" * (Catch::PHOTO_MAX_BYTES + 1)),
-      filename: "huge.jpg",
-      content_type: "image/jpeg"
-    )
-    assert_not catch_record.valid?
-    assert_includes catch_record.errors[:photo].join, "larger"
-  end
-
-  test "video must be a video content type" do
-    catch_record = build(:catch, user: @user, species: @walleye)
-    catch_record.video.attach(io: StringIO.new("not a video"), filename: "evil.exe",
-                   content_type: "application/octet-stream")
-    assert_not catch_record.valid?
-    assert catch_record.errors[:video].any?
-  end
-
-  test "video over the size cap is rejected" do
-    catch_record = build(:catch, user: @user, species: @walleye)
+  test "video attachments are gated on content type and size" do
     # `Minitest::Object#stub` needs minitest/mock, which isn't loadable under
     # this app's bundled minitest 6.0.6 (no mock.rb shipped, unlike the
     # 5.x default gem still present system-wide) — attach real oversized
-    # content instead, mirroring the existing photo byte-cap test below.
-    catch_record.video.attach(
-      io: StringIO.new("x" * (Catch::VIDEO_MAX_BYTES + 1)),
-      filename: "clip.mp4",
-      content_type: "video/mp4"
-    )
-    assert_not catch_record.valid?
-    assert catch_record.errors[:video].any? { |m| m.include?("MB") }
-  end
+    # content instead, mirroring the photo byte-cap test above.
+    [
+      ["a non-video content type",
+       { io: StringIO.new("not a video"), filename: "evil.exe", content_type: "application/octet-stream" },
+       :invalid, nil],
+      ["a video over the size cap",
+       { io: StringIO.new("x" * (Catch::VIDEO_MAX_BYTES + 1)), filename: "clip.mp4", content_type: "video/mp4" },
+       :invalid, "MB"],
+      ["an mp4 within limits",
+       { io: StringIO.new("x"), filename: "clip.mp4", content_type: "video/mp4" },
+       :valid, nil]
+    ].each do |label, upload, expectation, message|
+      catch_record = build(:catch, user: @user, species: @walleye)
+      catch_record.video.attach(**upload)
+      catch_record.valid?
 
-  test "mp4 video within limits is accepted" do
-    catch_record = build(:catch, user: @user, species: @walleye)
-    catch_record.video.attach(io: StringIO.new("x"), filename: "clip.mp4", content_type: "video/mp4")
-    catch_record.valid?
-    assert_empty catch_record.errors[:video]
+      if expectation == :valid
+        assert_empty catch_record.errors[:video], "#{label} should be accepted"
+      else
+        assert catch_record.errors[:video].any?, "#{label} should be rejected"
+        assert(catch_record.errors[:video].any? { |m| m.include?(message) }, "#{label}: error text") if message
+      end
+    end
   end
 
   test "a legacy video the old API accepted unvalidated does not block later saves" do
@@ -162,40 +124,32 @@ class CatchTest < ActiveSupport::TestCase
     assert catch_record.valid?, catch_record.errors.full_messages.join(", ")
   end
 
-  # One row per capped species; a catch over the cap is invalid and the error
-  # names the species. Boundary (== cap is valid) cases are kept explicit below.
+  # One row per capped species: a catch over the cap is invalid and the error
+  # names the species, while a catch at exactly the cap is valid.
   LENGTH_CAPS = {
     "Walleye" => 50, "Perch" => 20, "Pike" => 70, "Bass" => 35,
     "Lake Trout" => 55, "Stocked Trout" => 35, "Tagged Walleye" => 50,
     "Other" => 200
   }.freeze
 
-  test "a catch over its species length cap is invalid and the error names the species" do
+  test "species length caps reject over-cap catches, allow exactly-at-cap, and ignore uncapped species" do
     LENGTH_CAPS.each do |name, cap|
       species = name == "Walleye" ? @walleye : create(:species, club: @club, name: name)
-      attrs = { user: @user, species: species, length_inches: cap + 0.5 }
+      attrs = { user: @user, species: species }
       attrs[:tag_number] = "A1" if name == "Tagged Walleye"
-      too_big = build(:catch, **attrs)
+
+      too_big = build(:catch, **attrs, length_inches: cap + 0.5)
       assert_not too_big.valid?, "#{name} over #{cap}\" should be invalid"
-      assert_includes too_big.errors[:length_inches].join, name
+      assert_includes too_big.errors[:length_inches].join, name, "#{name} over-cap error names the species"
+
+      at_cap = build(:catch, **attrs, length_inches: cap)
+      assert at_cap.valid?,
+             "#{name} at exactly #{cap}\" should be valid: #{at_cap.errors.full_messages.to_sentence}"
     end
-  end
 
-  test "walleye at exactly 50 inches is valid" do
-    boundary = build(:catch, user: @user, species: @walleye, length_inches: 50)
-    assert boundary.valid?
-  end
-
-  test "other at exactly 200 inches is valid" do
-    other = create(:species, club: @club, name: "Other")
-    boundary = build(:catch, user: @user, species: other, length_inches: 200)
-    assert boundary.valid?
-  end
-
-  test "a species not in the cap table accepts any positive length" do
     crappie = create(:species, club: @club, name: "Crappie")
-    big = build(:catch, user: @user, species: crappie, length_inches: 500)
-    assert big.valid?
+    uncapped = build(:catch, user: @user, species: crappie, length_inches: 500)
+    assert uncapped.valid?, "a species not in the cap table accepts any positive length"
   end
 
   test "length_cap_for looks up the cap by species name, case-insensitive" do
@@ -205,68 +159,65 @@ class CatchTest < ActiveSupport::TestCase
     assert_nil Catch.length_cap_for(nil)
   end
 
-  test "note up to 500 chars is valid" do
-    catch_record = build(:catch, user: @user, species: @walleye, note: "a" * 500)
-    assert catch_record.valid?
+  test "note is optional and capped at 500 chars" do
+    {
+      nil => nil,
+      "a" * 500 => nil,
+      "a" * 501 => "too long"
+    }.each do |note, error|
+      label = note.nil? ? "a nil note" : "a #{note.length}-char note"
+      catch_record = build(:catch, user: @user, species: @walleye, note: note)
+
+      if error
+        assert_not catch_record.valid?, "#{label} should be invalid"
+        assert_includes catch_record.errors[:note].join, error, "#{label}: error text"
+      else
+        assert catch_record.valid?, "#{label} should be valid: #{catch_record.errors.full_messages.to_sentence}"
+      end
+    end
   end
 
-  test "note over 500 chars is invalid" do
-    catch_record = build(:catch, user: @user, species: @walleye, note: "a" * 501)
-    assert_not catch_record.valid?
-    assert_includes catch_record.errors[:note].join, "too long"
-  end
-
-  test "note nil is valid" do
-    catch_record = build(:catch, user: @user, species: @walleye, note: nil)
-    assert catch_record.valid?
-  end
-
-  test "latest_approver returns the judge of the most recent approve action" do
+  test "latest_approver is the judge of the most recent approve, and nil otherwise" do
     judge = create(:user, club: @club, role: :organizer, name: "Judy")
-    catch_record = create(:catch, user: @user, species: @walleye, status: :needs_review)
-    create(:judge_action, catch: catch_record, judge_user: judge, action: :approve)
-    assert_equal judge, catch_record.latest_approver
+
+    approved = create(:catch, user: @user, species: @walleye, status: :needs_review)
+    create(:judge_action, catch: approved, judge_user: judge, action: :approve)
+    assert_equal judge, approved.latest_approver, "most recent action is an approve"
+
+    untouched = create(:catch, user: @user, species: @walleye)
+    assert_nil untouched.latest_approver, "no judge actions exist"
+
+    reflagged = create(:catch, user: @user, species: @walleye, status: :needs_review)
+    create(:judge_action, catch: reflagged, judge_user: judge, action: :approve, created_at: 2.minutes.ago)
+    create(:judge_action, catch: reflagged, judge_user: judge, action: :flag, created_at: 1.minute.ago)
+    assert_nil reflagged.latest_approver, "most recent action is a flag"
   end
 
-  test "latest_approver returns nil when no judge actions exist" do
-    catch_record = create(:catch, user: @user, species: @walleye)
-    assert_nil catch_record.latest_approver
-  end
-
-  test "latest_approver returns nil when most recent action is a flag" do
+  test "disqualification_note returns the latest DQ note, breaks ties by id, and is nil unless disqualified" do
     judge = create(:user, club: @club, role: :organizer)
-    catch_record = create(:catch, user: @user, species: @walleye, status: :needs_review)
-    create(:judge_action, catch: catch_record, judge_user: judge, action: :approve, created_at: 2.minutes.ago)
-    create(:judge_action, catch: catch_record, judge_user: judge, action: :flag, created_at: 1.minute.ago)
-    assert_nil catch_record.latest_approver
-  end
 
-  test "disqualification_note returns the latest disqualify note when DQ'd" do
-    judge = create(:user, club: @club, role: :organizer)
-    catch_record = create(:catch, user: @user, species: @walleye, status: :disqualified)
-    create(:judge_action, catch: catch_record, judge_user: judge, action: :disqualify, note: "blurry photo")
-    assert_equal "blurry photo", catch_record.disqualification_note
-  end
+    single = create(:catch, user: @user, species: @walleye, status: :disqualified)
+    create(:judge_action, catch: single, judge_user: judge, action: :disqualify, note: "blurry photo")
+    assert_equal "blurry photo", single.disqualification_note, "one disqualify action"
 
-  test "disqualification_note returns the most recent of multiple DQ actions" do
-    judge = create(:user, club: @club, role: :organizer)
-    catch_record = create(:catch, user: @user, species: @walleye, status: :disqualified)
-    create(:judge_action, catch: catch_record, judge_user: judge, action: :disqualify,
+    multiple = create(:catch, user: @user, species: @walleye, status: :disqualified)
+    create(:judge_action, catch: multiple, judge_user: judge, action: :disqualify,
                           note: "first reason", created_at: 2.minutes.ago)
-    create(:judge_action, catch: catch_record, judge_user: judge, action: :disqualify,
+    create(:judge_action, catch: multiple, judge_user: judge, action: :disqualify,
                           note: "actual reason", created_at: 1.minute.ago)
-    assert_equal "actual reason", catch_record.disqualification_note
-  end
+    assert_equal "actual reason", multiple.disqualification_note, "most recent of multiple DQ actions"
 
-  test "disqualification_note breaks created_at ties deterministically by highest id" do
-    judge = create(:user, club: @club, role: :organizer)
-    catch_record = create(:catch, user: @user, species: @walleye, status: :disqualified)
+    tied = create(:catch, user: @user, species: @walleye, status: :disqualified)
     same_time = 1.minute.ago
-    create(:judge_action, catch: catch_record, judge_user: judge, action: :disqualify,
+    create(:judge_action, catch: tied, judge_user: judge, action: :disqualify,
                           note: "earlier row", created_at: same_time)
-    create(:judge_action, catch: catch_record, judge_user: judge, action: :disqualify,
+    create(:judge_action, catch: tied, judge_user: judge, action: :disqualify,
                           note: "later row", created_at: same_time)
-    assert_equal "later row", catch_record.disqualification_note
+    assert_equal "later row", tied.disqualification_note, "created_at tie broken by highest id"
+
+    not_dqd = create(:catch, user: @user, species: @walleye, status: :needs_review)
+    create(:judge_action, catch: not_dqd, judge_user: judge, action: :disqualify, note: "stale")
+    assert_nil not_dqd.disqualification_note, "catch is not disqualified"
   end
 
   test "disqualification_note consumes eager-loaded judge_actions without re-querying" do
@@ -284,88 +235,75 @@ class CatchTest < ActiveSupport::TestCase
                  "disqualification_note should read the preloaded association, not re-query per row"
   end
 
-  test "disqualification_note returns nil when catch is not disqualified" do
-    judge = create(:user, club: @club, role: :organizer)
-    catch_record = create(:catch, user: @user, species: @walleye, status: :needs_review)
-    create(:judge_action, catch: catch_record, judge_user: judge, action: :disqualify, note: "stale")
-    assert_nil catch_record.disqualification_note
-  end
-
-  test "tag_number is normalized to uppercase before validation" do
+  test "tag_number is upcased, required for Tagged Walleye, and length checked" do
     user = create(:user)
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    c = build(:catch, user: user, species: tagged, tag_number: "a1234", length_inches: 18.0)
-    c.valid?
-    assert_equal "A1234", c.tag_number
-  end
 
-  test "tag_number is required when species is Tagged Walleye" do
-    user = create(:user)
-    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    c = build(:catch, user: user, species: tagged, tag_number: nil, length_inches: 18.0)
-    assert_not c.valid?
-    assert_includes c.errors[:tag_number], "is required for Tagged Walleye catches"
-  end
+    normalized = build(:catch, user: user, species: tagged, tag_number: "a1234", length_inches: 18.0)
+    normalized.valid?
+    assert_equal "A1234", normalized.tag_number, "tag numbers are upcased before validation"
 
-  test "tag_number is not required when species is not Tagged Walleye" do
-    user = create(:user)
-    walleye = create(:species, name: "Walleye Test #{SecureRandom.hex(2)}")
-    c = build(:catch, user: user, species: walleye, tag_number: nil, length_inches: 18.0)
-    assert c.valid?, c.errors.full_messages.to_sentence
-  end
+    # Real tags get typed on a boat: smart quotes from an inch mark, spaces,
+    # punctuation. A rejected tag strands the queued catch on the phone (the
+    # 2026-09-12 stuck-walleye incident), so any text is accepted and fixed
+    # up later by an organizer rather than bounced at sync time.
+    ["X1795\u201D", "abc 123!", "A/B.C"].each do |tag|
+      loose = build(:catch, user: user, species: tagged, tag_number: tag, length_inches: 18.0)
+      assert loose.valid?, "tag_number #{tag.inspect} should be accepted: #{loose.errors.full_messages.to_sentence}"
+      assert_equal tag.strip.upcase, loose.tag_number
+    end
 
-  test "tag_number must match [A-Z0-9-] format" do
-    user = create(:user)
-    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    c = build(:catch, user: user, species: tagged, tag_number: "abc 123!", length_inches: 18.0)
-    assert_not c.valid?
-    assert_includes c.errors[:tag_number], "may only contain letters, numbers, and dashes"
-  end
+    untagged_species = create(:species, name: "Walleye Test #{SecureRandom.hex(2)}")
+    optional = build(:catch, user: user, species: untagged_species, tag_number: nil, length_inches: 18.0)
+    assert optional.valid?,
+           "tag_number is not required off Tagged Walleye: #{optional.errors.full_messages.to_sentence}"
 
-  test "tag_number max length is 16" do
-    user = create(:user)
-    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    c = build(:catch, user: user, species: tagged, tag_number: "A" * 17, length_inches: 18.0)
-    assert_not c.valid?
-    assert(c.errors[:tag_number].any? { |m| m.include?("16") })
-  end
+    {
+      nil => "is required for Tagged Walleye catches",
+      "A" * 17 => nil # over the 16-char max; the message names the limit
+    }.each do |tag, message|
+      c = build(:catch, user: user, species: tagged, tag_number: tag, length_inches: 18.0)
+      assert_not c.valid?, "tag_number #{tag.inspect} should be invalid"
 
-  test "weight_text is optional even for Tagged Walleye" do
-    user = create(:user)
-    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    c = build(:catch, user: user, species: tagged, tag_number: "A1", weight_text: nil, length_inches: 18.0)
-    assert c.valid?, c.errors.full_messages.to_sentence
-  end
-
-  test "weight_text accepts freeform values verbatim" do
-    user = create(:user)
-    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    ["4 lbs 3oz", "2.1kg", "approx 2kg!?", "3 pounds"].each do |value|
-      c = build(:catch, user: user, species: tagged, tag_number: "A1", weight_text: value, length_inches: 18.0)
-      assert c.valid?, "expected #{value.inspect} to be valid: #{c.errors.full_messages.to_sentence}"
-      assert_equal value, c.weight_text
+      if message
+        assert_includes c.errors[:tag_number], message, "tag_number #{tag.inspect}: error text"
+      else
+        assert(c.errors[:tag_number].any? { |m| m.include?("16") },
+               "tag_number #{tag.inspect}: error should name the 16-char max")
+      end
     end
   end
 
-  test "weight_text max length is 32" do
+  test "weight_text is optional freeform text, trimmed, and capped at 32 chars" do
     user = create(:user)
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    c = build(:catch, user: user, species: tagged, tag_number: "A1", weight_text: "x" * 33, length_inches: 18.0)
-    assert_not c.valid?
-    assert(c.errors[:weight_text].any? { |m| m.include?("32") })
-  end
+    with_weight = lambda do |value|
+      build(:catch, user: user, species: tagged, tag_number: "A1", weight_text: value, length_inches: 18.0)
+    end
 
-  test "weight_text is trimmed and whitespace-only becomes nil" do
-    user = create(:user)
-    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    {
+      nil => nil,                          # optional even for Tagged Walleye
+      "4 lbs 3oz" => "4 lbs 3oz",
+      "2.1kg" => "2.1kg",
+      "approx 2kg!?" => "approx 2kg!?",
+      "3 pounds" => "3 pounds",
+      "  4 lbs 3oz  " => "4 lbs 3oz",      # trimmed
+      "   " => nil                         # whitespace-only becomes nil
+    }.each do |value, expected|
+      c = with_weight.call(value)
+      assert c.valid?, "weight_text #{value.inspect} should be valid: #{c.errors.full_messages.to_sentence}"
 
-    c1 = build(:catch, user: user, species: tagged, tag_number: "A1", weight_text: "  4 lbs 3oz  ", length_inches: 18.0)
-    c1.valid?
-    assert_equal "4 lbs 3oz", c1.weight_text
+      if expected.nil?
+        assert_nil c.weight_text, "weight_text #{value.inspect} normalizes to nil"
+      else
+        assert_equal expected, c.weight_text, "weight_text #{value.inspect} is kept verbatim"
+      end
+    end
 
-    c2 = build(:catch, user: user, species: tagged, tag_number: "A1", weight_text: "   ", length_inches: 18.0)
-    c2.valid?
-    assert_nil c2.weight_text
+    too_long = with_weight.call("x" * 33)
+    assert_not too_long.valid?, "a 33-char weight_text should be invalid"
+    assert(too_long.errors[:weight_text].any? { |m| m.include?("32") },
+           "the weight_text error should name the 32-char max")
   end
 
   test "length_unit must be inches or centimeters" do
@@ -374,21 +312,11 @@ class CatchTest < ActiveSupport::TestCase
     assert_includes c.errors[:length_unit], "is not included in the list"
   end
 
-  test "missing length_unit is inferred from the value on validation" do
-    c = build(:catch, length_inches: 6.99, length_unit: nil)
-    c.valid?
-    assert_equal "centimeters", c.length_unit
-  end
-
-  test "missing length_unit on an on-grid value defaults to inches" do
-    c = build(:catch, length_inches: 18.5, length_unit: nil)
-    c.valid?
-    assert_equal "inches", c.length_unit
-  end
-
-  test "geofence override columns default to false" do
-    c = create(:catch)
-    assert_equal false, c.override_in_lake
-    assert_equal false, c.override_in_sask
+  test "a missing length_unit is inferred from the value on validation" do
+    { 6.99 => "centimeters", 18.5 => "inches" }.each do |value, expected|
+      c = build(:catch, length_inches: value, length_unit: nil)
+      c.valid?
+      assert_equal expected, c.length_unit, "#{value} should infer #{expected}"
+    end
   end
 end

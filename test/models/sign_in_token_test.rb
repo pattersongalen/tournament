@@ -19,25 +19,23 @@ class SignInTokenTest < ActiveSupport::TestCase
     assert_not_nil token.reload.used_at
   end
 
-  test "consume! returns nil for an unknown token" do
-    assert_nil SignInToken.consume!("nope")
-  end
+  test "consume! returns nil for unknown, expired, already-used, or code-kind tokens" do
+    expired = SignInToken.issue!(user: @user)
+    expired.update!(expires_at: 1.minute.ago)
 
-  test "consume! returns nil for an expired token" do
-    token = SignInToken.issue!(user: @user)
-    token.update!(expires_at: 1.minute.ago)
-    assert_nil SignInToken.consume!(token.token)
-  end
+    used = SignInToken.issue!(user: @user)
+    SignInToken.consume!(used.token)
 
-  test "consume! returns nil for an already-used token" do
-    token = SignInToken.issue!(user: @user)
-    SignInToken.consume!(token.token)
-    assert_nil SignInToken.consume!(token.token)
-  end
-
-  test "consume! refuses to accept code-kind tokens" do
     code = SignInToken.issue_code!(user: @user)
-    assert_nil SignInToken.consume!(code.token)
+
+    {
+      "unknown token"      => "nope",
+      "expired token"      => expired.token,
+      "already-used token" => used.token,
+      "code-kind token"    => code.token
+    }.each do |label, token|
+      assert_nil SignInToken.consume!(token), label
+    end
   end
 
   test "issue_code! creates an 8-digit code valid 10 minutes" do
@@ -51,15 +49,11 @@ class SignInTokenTest < ActiveSupport::TestCase
   # auto-issues a code from the public, unauthenticated sign-in form, so
   # invalidation would let anyone who knows a member's email kill an
   # organizer-issued code before the member can type it in.
-  test "issue_code! leaves prior open codes valid" do
+  test "issue_code! leaves prior open codes valid, so an older one can still be consumed" do
     first = SignInToken.issue_code!(user: @user)
     SignInToken.issue_code!(user: @user)
-    assert_nil first.reload.used_at
-  end
+    assert_nil first.reload.used_at, "issuing a new code should not invalidate the old one"
 
-  test "consume_code! accepts an older open code after a newer one was issued" do
-    first = SignInToken.issue_code!(user: @user)
-    SignInToken.issue_code!(user: @user)
     record = SignInToken.consume_code!(email: @user.email, code: first.token)
     assert_equal first, record
     assert_not_nil first.reload.used_at
@@ -67,7 +61,7 @@ class SignInTokenTest < ActiveSupport::TestCase
 
   # With codes coexisting, a wrong try must burn an attempt on every open code —
   # otherwise issuing fresh codes would hand a brute-forcer a clean counter.
-  test "wrong tries count against every open code" do
+  test "wrong tries count against every open code, locking each after MAX_ATTEMPTS" do
     first  = SignInToken.issue_code!(user: @user)
     second = SignInToken.issue_code!(user: @user)
     SignInToken::CODE_MAX_ATTEMPTS.times do
@@ -75,6 +69,10 @@ class SignInTokenTest < ActiveSupport::TestCase
     end
     assert_not_nil first.reload.used_at
     assert_not_nil second.reload.used_at
+
+    # both are now locked out, even when the correct code is finally given
+    assert_nil SignInToken.consume_code!(email: @user.email, code: first.token), "first stays locked"
+    assert_nil SignInToken.consume_code!(email: @user.email, code: second.token), "second stays locked"
   end
 
   # Wrong guesses are free for anyone who knows the email (the public form
@@ -99,36 +97,23 @@ class SignInTokenTest < ActiveSupport::TestCase
     assert_not_nil code.reload.used_at
   end
 
-  test "consume_code! returns nil on email mismatch" do
+  test "consume_code! returns nil on email mismatch or when no open code exists" do
+    assert_nil SignInToken.consume_code!(email: @user.email, code: "12345678"), "no open code exists"
+
     code = SignInToken.issue_code!(user: @user)
-    assert_nil SignInToken.consume_code!(email: "wrong@example.com", code: code.token)
+    assert_nil SignInToken.consume_code!(email: "wrong@example.com", code: code.token), "email mismatch"
     assert_nil code.reload.used_at
   end
 
-  test "consume_code! locks the code after MAX_ATTEMPTS wrong tries" do
-    code = SignInToken.issue_code!(user: @user)
-    SignInToken::CODE_MAX_ATTEMPTS.times do
-      assert_nil SignInToken.consume_code!(email: @user.email, code: "00000000")
-    end
-    assert_not_nil code.reload.used_at
-    assert_nil SignInToken.consume_code!(email: @user.email, code: code.token)
-  end
-
-  test "consume_code! is nil when no open code exists" do
-    assert_nil SignInToken.consume_code!(email: @user.email, code: "12345678")
-  end
-
-  test "consume! returns nil for a deactivated user" do
+  test "consume! and consume_code! return nil for a deactivated user" do
     token = SignInToken.issue!(user: @user)
+    code  = SignInToken.issue_code!(user: @user)
     @user.update!(deactivated_at: Time.current)
-    assert_nil SignInToken.consume!(token.token)
-    assert_nil token.reload.used_at
-  end
 
-  test "consume_code! returns nil for a deactivated user" do
-    code = SignInToken.issue_code!(user: @user)
-    @user.update!(deactivated_at: Time.current)
-    assert_nil SignInToken.consume_code!(email: @user.email, code: code.token)
+    assert_nil SignInToken.consume!(token.token), "consume!"
+    assert_nil token.reload.used_at
+
+    assert_nil SignInToken.consume_code!(email: @user.email, code: code.token), "consume_code!"
     assert_nil code.reload.used_at
   end
 
@@ -150,66 +135,58 @@ class SignInTokenTest < ActiveSupport::TestCase
     assert_not SignInToken.send(:claim, code), "second claim should miss"
   end
 
-  test "issue! stores explicit club" do
-    club_a = create(:club)
-    create(:club_membership, user: @user, club: club_a, role: :member)
-    token = SignInToken.issue!(user: @user, club: club_a)
-    assert_equal club_a, token.club
+  test "issue!/issue_code! resolve club from an explicit arg or membership fallback" do
+    {
+      "issue! uses explicit club" => -> {
+        user = create(:user, club: nil)
+        club_a = create(:club)
+        create(:club_membership, user: user, club: club_a, role: :member)
+        [SignInToken.issue!(user: user, club: club_a).club, club_a]
+      },
+      "issue! falls back to first active membership when club not given" => -> {
+        user = create(:user, club: nil)
+        club_a = create(:club)
+        create(:club_membership, user: user, club: club_a, role: :member)
+        [SignInToken.issue!(user: user).club, club_a]
+      },
+      "issue! sets nil club when user has no memberships" => -> {
+        user = create(:user, club: nil)
+        [SignInToken.issue!(user: user).club, nil]
+      },
+      "issue! ignores deactivated memberships in fallback" => -> {
+        user = create(:user, club: nil)
+        club_a = create(:club)
+        create(:club_membership, user: user, club: club_a, deactivated_at: Time.current)
+        [SignInToken.issue!(user: user).club, nil]
+      },
+      "issue_code! stores explicit club" => -> {
+        user = create(:user, club: nil)
+        club_a = create(:club)
+        [SignInToken.issue_code!(user: user, club: club_a).club, club_a]
+      },
+      "issue! fallback prefers the older membership when user is in multiple clubs" => -> {
+        user = create(:user, club: nil)
+        older = create(:club)
+        newer = create(:club)
+        create(:club_membership, user: user, club: older, role: :member, created_at: 2.days.ago)
+        create(:club_membership, user: user, club: newer, role: :member, created_at: 1.day.ago)
+        [SignInToken.issue!(user: user).club, older]
+      }
+    }.each do |label, setup|
+      actual, expected = setup.call
+      expected.nil? ? assert_nil(actual, label) : assert_equal(expected, actual, label)
+    end
   end
 
-  test "issue! falls back to user's first active membership when club not given" do
-    club_a = create(:club)
-    create(:club_membership, user: @user, club: club_a, role: :member)
-    token = SignInToken.issue!(user: @user)
-    assert_equal club_a, token.club
-  end
-
-  test "issue! sets nil club when user has no memberships" do
-    token = SignInToken.issue!(user: @user)
-    assert_nil token.club
-  end
-
-  test "issue! ignores deactivated memberships in fallback" do
-    club_a = create(:club)
-    create(:club_membership, user: @user, club: club_a, deactivated_at: Time.current)
-    token = SignInToken.issue!(user: @user)
-    assert_nil token.club
-  end
-
-  test "issue_code! stores explicit club" do
-    club_a = create(:club)
-    code = SignInToken.issue_code!(user: @user, club: club_a)
-    assert_equal club_a, code.club
-  end
-
-  test "issue! fallback prefers the older membership when user is in multiple clubs" do
-    older = create(:club)
-    newer = create(:club)
-    create(:club_membership, user: @user, club: older, role: :member, created_at: 2.days.ago)
-    create(:club_membership, user: @user, club: newer, role: :member, created_at: 1.day.ago)
-    token = SignInToken.issue!(user: @user)
-    assert_equal older, token.club
-  end
-
-  test "issue! records issued_by when given" do
+  test "issue!/issue_code! record issued_by when given, nil otherwise" do
     issuer = create(:user)
-    token = SignInToken.issue!(user: @user, issued_by: issuer)
-    assert_equal issuer, token.issued_by_user
-  end
-
-  test "issue! leaves issued_by nil when not given" do
-    token = SignInToken.issue!(user: @user)
-    assert_nil token.issued_by_user
-  end
-
-  test "issue_code! records issued_by when given" do
-    issuer = create(:user)
-    code = SignInToken.issue_code!(user: @user, issued_by: issuer)
-    assert_equal issuer, code.issued_by_user
-  end
-
-  test "issue_code! leaves issued_by nil when not given" do
-    code = SignInToken.issue_code!(user: @user)
-    assert_nil code.issued_by_user
+    {
+      "issue! records the granter"       => [SignInToken.issue!(user: @user, issued_by: issuer).issued_by_user, issuer],
+      "issue! nil when not given"        => [SignInToken.issue!(user: @user).issued_by_user, nil],
+      "issue_code! records the granter"  => [SignInToken.issue_code!(user: @user, issued_by: issuer).issued_by_user, issuer],
+      "issue_code! nil when not given"   => [SignInToken.issue_code!(user: @user).issued_by_user, nil]
+    }.each do |label, (actual, expected)|
+      expected.nil? ? assert_nil(actual, label) : assert_equal(expected, actual, label)
+    end
   end
 end

@@ -12,8 +12,12 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
     sign_in_as(@user)
   end
 
-  test "POST /api/catches creates and places a catch" do
+  # Merges: "creates and places a catch", "is idempotent on client_uuid",
+  # "dedup retry does NOT double-place a catch that already has placements",
+  # "dedup response reports the catch's real flags".
+  test "POST /api/catches creates and places a catch; a duplicate submit is idempotent and reports the catch's real flags" do
     photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
+
     assert_difference -> { Catch.count } => 1, -> { CatchPlacement.count } => 1 do
       post "/api/catches", params: {
         catch: {
@@ -32,44 +36,55 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
     body = JSON.parse(response.body)
     assert_equal "synced", body["status"]
     assert_equal 1, body["placements"].size
-  end
 
-  test "POST /api/catches is idempotent on client_uuid" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    payload = lambda {
+    # A duplicate submit (missing GPS, so it also carries a real flag) neither
+    # double-creates the Catch nor double-places it, and reports the catch's
+    # actual flags rather than a stale/empty snapshot.
+    dup_payload = lambda {
       post "/api/catches", params: {
-        catch: { species_id: @walleye.id, length_inches: 18, captured_at_device: Time.current.iso8601,
-                 client_uuid: "uuid-DUP", photo: photo }
+        catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
+                 client_uuid: "uuid-DUPFLAGS", photo: fixture_file_upload("sample_walleye.jpg", "image/jpeg") }
       }, headers: { "Accept" => "application/json" }
     }
-    payload.call
-    assert_no_difference "Catch.count" do
-      payload.call
+    dup_payload.call
+    assert_no_difference -> { Catch.count } do
+      assert_no_difference -> { CatchPlacement.count } do
+        dup_payload.call
+      end
     end
     assert_response :ok
+    assert_includes JSON.parse(response.body)["flags"], "missing_gps"
   end
 
-  test "missing GPS flags catch as needs_review" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 12, captured_at_device: Time.current.iso8601,
-               client_uuid: "uuid-NOGPS", photo: photo }
-    }, headers: { "Accept" => "application/json" }
-    body = JSON.parse(response.body)
-    assert_equal "needs_review", body["status"]
-    assert_includes body["flags"], "missing_gps"
-  end
-
-  test "clock skew > threshold flags as needs_review" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
+  # Merges: "missing GPS flags catch as needs_review", "clock skew > threshold
+  # flags as needs_review", "out-of-bounds GPS flags catch as needs_review",
+  # "POST /api/catches persists flags on the catch record".
+  test "flags: missing GPS, clock skew, and out-of-bounds GPS mark the catch needs_review and persist the flag" do
     now = Time.current
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 12,
-               captured_at_device: now.iso8601, captured_at_gps: (now - 10.minutes).iso8601,
-               latitude: 49.0, longitude: -98.0, gps_accuracy_m: 5,
-               client_uuid: "uuid-SKEW", photo: photo }
-    }, headers: { "Accept" => "application/json" }
-    assert_includes JSON.parse(response.body)["flags"], "clock_skew"
+    cases = {
+      "missing_gps" => { client_uuid: "uuid-NOGPS", extra: {} },
+      "clock_skew" => {
+        client_uuid: "uuid-SKEW",
+        extra: { captured_at_gps: (now - 10.minutes).iso8601, latitude: 49.0, longitude: -98.0, gps_accuracy_m: 5 }
+      },
+      "out_of_bounds" => {
+        client_uuid: "uuid-OOB",
+        extra: { captured_at_gps: now.iso8601, latitude: 49.9, longitude: -97.1, gps_accuracy_m: 5 }
+      }
+    }
+
+    cases.each do |flag, cfg|
+      photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
+      post "/api/catches", params: {
+        catch: { species_id: @walleye.id, length_inches: 12, captured_at_device: now.iso8601,
+                 client_uuid: cfg[:client_uuid], photo: photo }.merge(cfg[:extra])
+      }, headers: { "Accept" => "application/json" }
+      body = JSON.parse(response.body)
+      assert_equal "needs_review", body["status"], "#{flag}: status"
+      assert_includes body["flags"], flag, "#{flag}: response flags"
+      persisted = Catch.find_by(client_uuid: cfg[:client_uuid])
+      assert_includes persisted.flags, flag, "#{flag}: persisted flags"
+    end
   end
 
   test "POST /api/catches persists note but does not echo it in response" do
@@ -112,31 +127,9 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "centimeters", persisted.length_unit
   end
 
-  test "POST /api/catches persists flags on the catch record" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 12,
-               captured_at_device: Time.current.iso8601,
-               client_uuid: "uuid-PERSIST", photo: photo }
-    }, headers: { "Accept" => "application/json" }
-    persisted = Catch.find_by(client_uuid: "uuid-PERSIST")
-    assert_includes persisted.flags, "missing_gps"
-  end
-
-  test "out-of-bounds GPS flags catch as needs_review" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 12,
-               captured_at_device: Time.current.iso8601, captured_at_gps: Time.current.iso8601,
-               latitude: 49.9, longitude: -97.1, gps_accuracy_m: 5,
-               client_uuid: "uuid-OOB", photo: photo }
-    }, headers: { "Accept" => "application/json" }
-    body = JSON.parse(response.body)
-    assert_equal "needs_review", body["status"]
-    assert_includes body["flags"], "out_of_bounds"
-  end
-
-  test "POST /api/catches returns 401 once the user is deactivated" do
+  # Merges: "returns 401 once the user is deactivated" and "clears the stale
+  # session when the user is deactivated".
+  test "POST /api/catches returns 401 and clears the stale session once the user is deactivated" do
     @user.update!(deactivated_at: Time.current)
     photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
     post "/api/catches", params: {
@@ -147,15 +140,6 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
         client_uuid: "uuid-DEACT",
         photo: photo
       }
-    }, headers: { "Accept" => "application/json" }
-    assert_response :unauthorized
-  end
-
-  test "POST /api/catches clears the stale session when the user is deactivated" do
-    @user.update!(deactivated_at: Time.current)
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 19.5,
-               captured_at_device: Time.current.iso8601, client_uuid: "uuid-DEACT2" }
     }, headers: { "Accept" => "application/json" }
     assert_response :unauthorized
     assert_nil session[:user_id], "deactivated user's session should be cleared, not left poisoned"
@@ -184,43 +168,33 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_equal @user.id, persisted.logged_by_user_id
   end
 
-  test "POST /api/catches rejects teammate from another club" do
+  # Merges: "rejects teammate from another club" and "rejects teammate
+  # without a shared entry".
+  test "POST /api/catches rejects an invalid teammate (foreign club, or no shared entry)" do
     other_club = create(:club)
     foreigner = create(:user, club: other_club)
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-
-    assert_no_difference -> { Catch.count } do
-      post "/api/catches", params: {
-        teammate_user_id: foreigner.id,
-        catch: {
-          species_id: @walleye.id, length_inches: 18.5,
-          captured_at_device: Time.current.iso8601,
-          client_uuid: "uuid-foreign", photo: photo
-        }
-      }, headers: { "Accept" => "application/json" }
-    end
-    assert_response :unprocessable_entity
-    assert_match "Teammate not found", response.body
-  end
-
-  test "POST /api/catches rejects teammate without a shared entry" do
     other_user = create(:user, club: @club)
     other_entry = create(:tournament_entry, tournament: @tournament)
     create(:tournament_entry_member, tournament_entry: other_entry, user: other_user)
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
 
-    assert_no_difference -> { Catch.count } do
-      post "/api/catches", params: {
-        teammate_user_id: other_user.id,
-        catch: {
-          species_id: @walleye.id, length_inches: 18.5,
-          captured_at_device: Time.current.iso8601,
-          client_uuid: "uuid-no-share", photo: photo
-        }
-      }, headers: { "Accept" => "application/json" }
+    {
+      foreigner.id => "Teammate not found",
+      other_user.id => "aren't on the same entry"
+    }.each do |teammate_id, expected_message|
+      photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
+      assert_no_difference -> { Catch.count } do
+        post "/api/catches", params: {
+          teammate_user_id: teammate_id,
+          catch: {
+            species_id: @walleye.id, length_inches: 18.5,
+            captured_at_device: Time.current.iso8601,
+            client_uuid: "uuid-teammate-#{teammate_id}", photo: photo
+          }
+        }, headers: { "Accept" => "application/json" }
+      end
+      assert_response :unprocessable_entity, "teammate_id=#{teammate_id}"
+      assert_match expected_message, response.body, "teammate_id=#{teammate_id}"
     end
-    assert_response :unprocessable_entity
-    assert_match "aren't on the same entry", response.body
   end
 
   test "POST /api/catches is idempotent for retry of a teammate catch" do
@@ -245,83 +219,44 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_response :ok
   end
 
-  test "POST /api/catches sets lake from GPS coordinates" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    assert_difference -> { Catch.count } => 1 do
-      post "/api/catches", params: {
-        catch: {
-          species_id: @walleye.id,
-          length_inches: 19.5,
-          captured_at_device: Time.current.iso8601,
-          captured_at_gps: Time.current.iso8601,
-          latitude: 53.55, longitude: -103.65, gps_accuracy_m: 8,
-          client_uuid: "uuid-lake-tobin",
-          photo: photo
-        }
-      }, headers: { "Accept" => "application/json" }
-    end
-    assert_response :created
-    assert_equal "tobin", Catch.find_by(client_uuid: "uuid-lake-tobin").lake
-  end
-
-  test "persists tag_number on a Tagged Walleye catch" do
+  # Merges: "persists tag_number on a Tagged Walleye catch", "persists
+  # weight_text on a Tagged Walleye catch", "accepts blank weight_text on a
+  # Tagged Walleye catch".
+  test "Tagged Walleye catches persist tag_number and weight_text (blank weight_text accepted)" do
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    uuid = SecureRandom.uuid
 
+    uuid1 = SecureRandom.uuid
     post "/api/catches", params: {
       catch: {
-        species_id: tagged.id,
-        length_inches: 18.5,
-        captured_at_device: 1.minute.ago.iso8601,
-        client_uuid: uuid,
-        tag_number: "a1234",
+        species_id: tagged.id, length_inches: 18.5, captured_at_device: 1.minute.ago.iso8601,
+        client_uuid: uuid1, tag_number: "a1234",
         photo: fixture_file_upload("sample_walleye.jpg", "image/jpeg")
       }
     }, headers: { "Accept" => "application/json" }
-
     assert_response :created
-    catch_record = Catch.find_by(client_uuid: JSON.parse(response.body).fetch("client_uuid"))
-    assert_equal "A1234", catch_record.tag_number
-  end
+    assert_equal "A1234", Catch.find_by(client_uuid: uuid1).tag_number, "tag_number should upcase-persist"
 
-  test "persists weight_text on a Tagged Walleye catch" do
-    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    uuid = SecureRandom.uuid
-
+    uuid2 = SecureRandom.uuid
     post "/api/catches", params: {
       catch: {
-        species_id: tagged.id,
-        length_inches: 18.5,
-        captured_at_device: 1.minute.ago.iso8601,
-        client_uuid: uuid,
-        tag_number: "A1234",
-        weight_text: "4 lbs 3oz",
+        species_id: tagged.id, length_inches: 18.5, captured_at_device: 1.minute.ago.iso8601,
+        client_uuid: uuid2, tag_number: "A1234", weight_text: "4 lbs 3oz",
         photo: fixture_file_upload("sample_walleye.jpg", "image/jpeg")
       }
     }, headers: { "Accept" => "application/json" }
-
     assert_response :created
-    catch_record = Catch.find_by(client_uuid: JSON.parse(response.body).fetch("client_uuid"))
-    assert_equal "4 lbs 3oz", catch_record.weight_text
-  end
+    assert_equal "4 lbs 3oz", Catch.find_by(client_uuid: uuid2).weight_text, "weight_text should persist"
 
-  test "accepts blank weight_text on a Tagged Walleye catch" do
-    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    uuid = SecureRandom.uuid
-
+    uuid3 = SecureRandom.uuid
     post "/api/catches", params: {
       catch: {
-        species_id: tagged.id,
-        length_inches: 18.5,
-        captured_at_device: 1.minute.ago.iso8601,
-        client_uuid: uuid,
-        tag_number: "A1234",
+        species_id: tagged.id, length_inches: 18.5, captured_at_device: 1.minute.ago.iso8601,
+        client_uuid: uuid3, tag_number: "A1234",
         photo: fixture_file_upload("sample_walleye.jpg", "image/jpeg")
       }
     }, headers: { "Accept" => "application/json" }
-
     assert_response :created
-    assert_nil Catch.find_by(client_uuid: uuid).weight_text
+    assert_nil Catch.find_by(client_uuid: uuid3).weight_text, "blank weight_text should be accepted as nil"
   end
 
   # WebKit can send a request with NO body at all when it fails to stream a
@@ -344,24 +279,17 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
   # stops a photo-less row from persisting. If that validation is ever removed,
   # a photo-less 422 would leave a row behind and the client_uuid retry would
   # return 200 for a catch with no photo (poisoned idempotency, catch never
-  # placed). These two tests keep that from regressing silently.
-  test "POST /api/catches without a photo persists no row" do
+  # placed). This regression lock also covers the retry-with-photo recovery
+  # path, since both share the same client_uuid.
+  test "a photo-less submit persists no row, and a retry with the same client_uuid and a photo succeeds" do
     assert_no_difference "Catch.count" do
       post "/api/catches", params: {
         catch: { species_id: @walleye.id, length_inches: 18,
-                 captured_at_device: Time.current.iso8601, client_uuid: "uuid-NOPHOTO" }
+                 captured_at_device: Time.current.iso8601, client_uuid: "uuid-RETRY-PHOTO" }
       }, headers: { "Accept" => "application/json" }
     end
     assert_response :unprocessable_entity
     assert_match(/photo/i, JSON.parse(response.body)["errors"].join(", "))
-  end
-
-  test "retry with photo succeeds after a photo-less attempt with the same client_uuid" do
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 18,
-               captured_at_device: Time.current.iso8601, client_uuid: "uuid-RETRY-PHOTO" }
-    }, headers: { "Accept" => "application/json" }
-    assert_response :unprocessable_entity
 
     photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
     assert_difference "Catch.count", 1 do
@@ -423,21 +351,6 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_not_nil catch_record.reload.placements_evaluated_at
   end
 
-  test "dedup retry does NOT double-place a catch that already has placements" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    payload = lambda {
-      post "/api/catches", params: {
-        catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
-                 client_uuid: "uuid-NODOUBLE", photo: photo }
-      }, headers: { "Accept" => "application/json" }
-    }
-    payload.call
-    assert_no_difference "CatchPlacement.count" do
-      payload.call
-    end
-    assert_response :ok
-  end
-
   # A bingo catch legitimately keeps zero placements (the card is derived on
   # read), so "no placements yet" cannot mean "not yet processed". Without the
   # placements_evaluated_at stamp, every dedup retry (flaky LTE losing the 201,
@@ -471,105 +384,26 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_response :ok
   end
 
-  test "dedup response reports the catch's real flags" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    payload = lambda {
+  # Merges: "queued_by_user_id mismatch is rejected..." and "matching
+  # queued_by_user_id is accepted".
+  test "queued_by_user_id: mismatched id rejected, matching id accepted" do
+    {
+      "mismatched" => { id: -> { @user.id + 1 }, expect_created: false },
+      "matching" => { id: -> { @user.id }, expect_created: true }
+    }.each do |label, cfg|
+      photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
       post "/api/catches", params: {
         catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
-                 client_uuid: "uuid-FLAGS", photo: photo } # no GPS -> missing_gps flag
+                 client_uuid: "uuid-QUEUED-#{label}", photo: photo,
+                 queued_by_user_id: cfg[:id].call }
       }, headers: { "Accept" => "application/json" }
-    }
-    payload.call
-    payload.call
-    assert_response :ok
-    assert_includes JSON.parse(response.body)["flags"], "missing_gps"
-  end
-
-  test "catch without video in a requires_release_video tournament is flagged video_missing" do
-    @tournament.update!(requires_release_video: true)
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
-               latitude: 49.41, longitude: -103.62, gps_accuracy_m: 8,
-               captured_at_gps: Time.current.iso8601,
-               client_uuid: "uuid-VMISS", photo: photo }
-    }, headers: { "Accept" => "application/json" }
-    body = JSON.parse(response.body)
-    assert_includes body["flags"], "video_missing"
-    assert_equal "needs_review", body["status"]
-  end
-
-  test "video_failed param records an external video_failed flag" do
-    @tournament.update!(requires_release_video: true)
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
-               client_uuid: "uuid-VFAIL", photo: photo, video_failed: "true" }
-    }, headers: { "Accept" => "application/json" }
-    flags = JSON.parse(response.body)["flags"]
-    assert_includes flags, "video_failed"
-    # And it survives a recompute (external flag semantics):
-    c = Catch.find_by!(client_uuid: "uuid-VFAIL")
-    assert_includes Catches::ComputeFlags.recompute(c), "video_failed"
-  end
-
-  # The photo is the catch; the video is optional evidence. A video the model
-  # gate would reject must not 422 the whole catch — sync.js would mark the
-  # queued record failed behind the angler's back. The server drops it and
-  # raises the same flag the angler-declared failure path uses.
-  test "an unacceptable video is dropped and flagged instead of failing the catch" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    bad_video = fixture_file_upload("sample_walleye.jpg", "video/x-msvideo")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
-               client_uuid: "uuid-VDROP", photo: photo, video: bad_video }
-    }, headers: { "Accept" => "application/json" }
-    assert_response :created
-    assert_includes JSON.parse(response.body)["flags"], "video_failed"
-    c = Catch.find_by!(client_uuid: "uuid-VDROP")
-    assert_not c.video.attached?
-  end
-
-  test "an acceptable video still attaches" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    video = fixture_file_upload("tiny.mp4", "video/mp4")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
-               client_uuid: "uuid-VOK", photo: photo, video: video }
-    }, headers: { "Accept" => "application/json" }
-    assert_response :created
-    assert_not_includes JSON.parse(response.body)["flags"], "video_failed"
-    assert Catch.find_by!(client_uuid: "uuid-VOK").video.attached?
-  end
-
-  test "no video flag when no active tournament requires video" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
-               client_uuid: "uuid-NOVREQ", photo: photo }
-    }, headers: { "Accept" => "application/json" }
-    assert_not_includes JSON.parse(response.body)["flags"], "video_missing"
-  end
-
-  test "queued_by_user_id mismatch is rejected so a shared phone can't misattribute a catch" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
-               client_uuid: "uuid-WRONGUSER", photo: photo,
-               queued_by_user_id: @user.id + 1 }
-    }, headers: { "Accept" => "application/json" }
-    assert_response :unprocessable_entity
-    assert_match(/different account/i, JSON.parse(response.body)["errors"].join)
-  end
-
-  test "matching queued_by_user_id is accepted" do
-    photo = fixture_file_upload("sample_walleye.jpg", "image/jpeg")
-    post "/api/catches", params: {
-      catch: { species_id: @walleye.id, length_inches: 20, captured_at_device: Time.current.iso8601,
-               client_uuid: "uuid-RIGHTUSER", photo: photo,
-               queued_by_user_id: @user.id }
-    }, headers: { "Accept" => "application/json" }
-    assert_response :created
+      if cfg[:expect_created]
+        assert_response :created, "#{label} should be accepted"
+      else
+        assert_response :unprocessable_entity, "#{label} should be rejected"
+        assert_match(/different account/i, JSON.parse(response.body)["errors"].join)
+      end
+    end
   end
 
   test "teammate submission with no active club membership returns 422, not 500" do

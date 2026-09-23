@@ -6,23 +6,14 @@ class Admin::Clubs::TournamentsControllerTest < ActionDispatch::IntegrationTest
     @foreign_club = create(:club, name: "Northtown Anglers")
     @admin     = create(:user, club: @host_club, admin: true, role: :organizer)
     @organizer = create(:user, club: @host_club, role: :organizer)
-    @member    = create(:user, club: @host_club, role: :member)
 
     @foreign_t = create(:tournament, club: @foreign_club, name: "Northtown Spring Bash")
     @host_t    = create(:tournament, club: @host_club, name: "Host Club Derby")
   end
 
-  test "signed-out user redirects to sign-in" do
-    get admin_club_tournaments_path(@foreign_club)
-    assert_redirected_to new_session_path
-  end
-
-  test "non-admin member is forbidden" do
-    sign_in_as(@member)
-    get admin_club_tournaments_path(@foreign_club)
-    assert_response :forbidden
-  end
-
+  # Shares Admin::Clubs::BaseController with Members/Catches, which carry the
+  # full signed-out + non-admin gate coverage; this is a smoke that the same
+  # class-level before_actions apply here too.
   test "non-admin organizer is forbidden" do
     sign_in_as(@organizer)
     get admin_club_tournaments_path(@foreign_club)
@@ -70,12 +61,6 @@ class Admin::Clubs::TournamentsControllerTest < ActionDispatch::IntegrationTest
     sign_in_as(@admin)
     get admin_club_tournament_path(@foreign_club, @host_t)
     assert_response :not_found
-  end
-
-  test "non-admin cannot view tournament show" do
-    sign_in_as(@organizer)
-    get admin_club_tournament_path(@foreign_club, @foreign_t)
-    assert_response :forbidden
   end
 
   test "banner offers a back-to-hub link on sub-section pages" do

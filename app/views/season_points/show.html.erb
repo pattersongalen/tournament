@@ -28,5 +28,6 @@
     <% end %>
     <%= link_to "Past league nights →", season_points_tournaments_path,
                 class: "block w-full h-12 px-4 rounded-lg bg-slate-700 active:bg-slate-600 text-slate-100 text-center leading-[3rem]" %>
+    <%= render "how_points_work", club: @club %>
   <% end %>
 </div>

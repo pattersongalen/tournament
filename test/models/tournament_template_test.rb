@@ -1,5 +1,9 @@
 require "test_helper"
 
+# TournamentTemplate carries its own copy of the format validations (it is not a
+# shared concern with Tournament), so these mirror the Tournament model tests
+# rather than duplicating them. The format enum integers for both classes are
+# asserted once in TournamentTest#"format enum integers are stable".
 class TournamentTemplateTest < ActiveSupport::TestCase
   setup { @club = create(:club) }
 
@@ -10,259 +14,152 @@ class TournamentTemplateTest < ActiveSupport::TestCase
     assert t.scheduled?
   end
 
-  test "validation rejects partial schedule" do
-    t = build(:tournament_template, club: @club, default_weekday: 3)
-    assert_not t.valid?
-    assert_includes t.errors[:base].join, "must all be set together"
-  end
-
-  test "validation rejects end time at or before start time" do
-    t = build(:tournament_template, club: @club,
-              default_weekday: 3, default_start_time: "21:00", default_end_time: "19:00")
-    assert_not t.valid?
-    assert_includes t.errors[:default_end_time].join, "after the start time"
-  end
-
-  test "next_occurrence_at returns nil when not scheduled" do
-    t = create(:tournament_template, club: @club)
-    assert_nil t.next_occurrence_at
-  end
-
-  test "next_occurrence_at picks today when weekday matches and start is in the future" do
-    Time.use_zone("Saskatchewan") do
-      wednesday = Time.zone.local(2026, 5, 6, 12, 0)
-      t = create(:tournament_template, club: @club,
-                 default_weekday: 3, default_start_time: "19:00", default_end_time: "21:00")
-      starts, ends = t.next_occurrence_at(now: wednesday)
-      assert_equal Time.zone.local(2026, 5, 6, 19, 0), starts
-      assert_equal Time.zone.local(2026, 5, 6, 21, 0), ends
+  test "schedule validation rejects partial and inverted schedules" do
+    {
+      "weekday without times" => [{ default_weekday: 3 }, :base, "must all be set together"],
+      "end time before start" => [{ default_weekday: 3, default_start_time: "21:00", default_end_time: "19:00" },
+                                  :default_end_time, "after the start time"]
+    }.each do |label, (attrs, attribute, fragment)|
+      t = build(:tournament_template, club: @club, **attrs)
+      assert_not t.valid?, "#{label} should be invalid"
+      assert_includes t.errors[attribute].join, fragment, "#{label}: expected #{attribute} to mention #{fragment.inspect}"
     end
   end
 
-  test "next_occurrence_at jumps a week when weekday matches but start has passed" do
+  test "next_occurrence_at finds the next scheduled window" do
     Time.use_zone("Saskatchewan") do
-      late_wednesday = Time.zone.local(2026, 5, 6, 22, 0)
       t = create(:tournament_template, club: @club,
                  default_weekday: 3, default_start_time: "19:00", default_end_time: "21:00")
-      starts, _ends = t.next_occurrence_at(now: late_wednesday)
-      assert_equal Time.zone.local(2026, 5, 13, 19, 0), starts
+
+      {
+        "wednesday before the start time" => [Time.zone.local(2026, 5, 6, 12, 0),
+                                              Time.zone.local(2026, 5, 6, 19, 0), Time.zone.local(2026, 5, 6, 21, 0)],
+        "wednesday after the start time"  => [Time.zone.local(2026, 5, 6, 22, 0),
+                                              Time.zone.local(2026, 5, 13, 19, 0), Time.zone.local(2026, 5, 13, 21, 0)],
+        "a different weekday"             => [Time.zone.local(2026, 5, 4, 9, 0),
+                                              Time.zone.local(2026, 5, 6, 19, 0), Time.zone.local(2026, 5, 6, 21, 0)]
+      }.each do |label, (now, expected_starts, expected_ends)|
+        starts, ends = t.next_occurrence_at(now: now)
+        assert_equal expected_starts, starts, "#{label}: starts_at"
+        assert_equal expected_ends, ends, "#{label}: ends_at"
+      end
+
+      assert_nil create(:tournament_template, club: @club).next_occurrence_at,
+                 "an unscheduled template has no next occurrence"
     end
   end
 
-  test "next_occurrence_at finds next weekday when today is different" do
-    Time.use_zone("Saskatchewan") do
-      monday = Time.zone.local(2026, 5, 4, 9, 0)
-      t = create(:tournament_template, club: @club,
-                 default_weekday: 3, default_start_time: "19:00", default_end_time: "21:00")
-      starts, _ends = t.next_occurrence_at(now: monday)
-      assert_equal Time.zone.local(2026, 5, 6, 19, 0), starts
+  test "big_fish_season template requires solo mode and exactly one scoring slot" do
+    {
+      "solo with one species" => [:solo, 1, nil, nil],
+      "team mode"             => [:team, 1, :format, "Big Fish Season tournaments must be solo"],
+      "no species"            => [:solo, 0, :tournament_template_scoring_slots, "Big Fish Season tournaments must have exactly one species configured"],
+      "two species"           => [:solo, 2, :tournament_template_scoring_slots, "Big Fish Season tournaments must have exactly one species configured"]
+    }.each do |label, (mode, species_count, attribute, message)|
+      t = build(:tournament_template, club: @club, format: :big_fish_season, mode: mode)
+      species_count.times { t.tournament_template_scoring_slots.build(species: create(:species), slot_count: 3) }
+
+      if message
+        assert_not t.valid?, "#{label} should be invalid"
+        assert_includes t.errors[attribute], message, "#{label}: expected the #{attribute} message"
+      else
+        assert t.valid?, "#{label} should be valid: #{t.errors.full_messages.to_sentence}"
+      end
     end
   end
 
-  test "default format is standard" do
-    t = create(:tournament_template, club: @club)
-    assert_equal "standard", t.format
+  test "hidden_length template requires exactly one scoring slot and accepts either mode" do
+    {
+      "solo with one species" => [:solo, 1, nil],
+      "team with one species" => [:team, 1, nil],
+      "no species"            => [:solo, 0, "Hidden Length tournaments must have exactly one species configured"],
+      "two species"           => [:solo, 2, "Hidden Length tournaments must have exactly one species configured"]
+    }.each do |label, (mode, species_count, message)|
+      tpl = build(:tournament_template, club: @club, format: :hidden_length, mode: mode)
+      species_count.times { tpl.tournament_template_scoring_slots.build(species: create(:species), slot_count: 1) }
+
+      if message
+        assert_not tpl.valid?, "#{label} should be invalid"
+        assert_includes tpl.errors[:tournament_template_scoring_slots], message,
+                        "#{label}: expected the scoring slots message"
+      else
+        assert tpl.valid?, "#{label} should be valid: #{tpl.errors.full_messages.inspect}"
+        assert tpl.format_hidden_length?, "#{label}: format_hidden_length?"
+      end
+    end
   end
 
-  test "big_fish_season template requires solo mode" do
-    t = build(:tournament_template, club: @club, format: :big_fish_season, mode: :team)
-    assert_not t.valid?
-    assert_includes t.errors[:format], "Big Fish Season tournaments must be solo"
+  test "biggest_vs_smallest template requires exactly one scoring slot and accepts either mode" do
+    {
+      "solo with one species" => [:solo, 1, nil],
+      "team with one species" => [:team, 1, nil],
+      "no species"            => [:solo, 0, "Biggest vs Smallest tournaments must have exactly one species configured"],
+      "two species"           => [:solo, 2, "Biggest vs Smallest tournaments must have exactly one species configured"]
+    }.each do |label, (mode, species_count, message)|
+      tpl = build(:tournament_template, club: @club, format: :biggest_vs_smallest, mode: mode)
+      species_count.times { tpl.tournament_template_scoring_slots.build(species: create(:species), slot_count: 1) }
+
+      if message
+        assert_not tpl.valid?, "#{label} should be invalid"
+        assert_includes tpl.errors[:tournament_template_scoring_slots], message,
+                        "#{label}: expected the scoring slots message"
+      else
+        assert tpl.valid?, "#{label} should be valid: #{tpl.errors.full_messages.inspect}"
+        assert tpl.format_biggest_vs_smallest?, "#{label}: format_biggest_vs_smallest?"
+      end
+    end
   end
 
-  test "big_fish_season template accepts solo mode with one scoring slot" do
-    species = create(:species)
-    t = build(:tournament_template, club: @club, format: :big_fish_season, mode: :solo)
-    t.tournament_template_scoring_slots.build(species: species, slot_count: 3)
-    assert t.valid?, t.errors.full_messages.to_sentence
-  end
-
-  test "standard template accepts team mode" do
-    t = build(:tournament_template, club: @club, format: :standard, mode: :team)
-    assert t.valid?, t.errors.full_messages.to_sentence
-  end
-
-  test "big_fish_season template errors when no scoring slot is configured" do
-    t = build(:tournament_template, club: @club, format: :big_fish_season, mode: :solo)
-    assert_not t.valid?
-    assert_includes t.errors[:tournament_template_scoring_slots],
-                    "Big Fish Season tournaments must have exactly one species configured"
-  end
-
-  test "big_fish_season template errors when more than one scoring slot is configured" do
-    species_a = create(:species)
-    species_b = create(:species)
-    t = build(:tournament_template, club: @club, format: :big_fish_season, mode: :solo)
-    t.save!(validate: false)
-    t.tournament_template_scoring_slots.create!(species: species_a, slot_count: 1)
-    t.tournament_template_scoring_slots.create!(species: species_b, slot_count: 1)
-    t.reload
-    assert_not t.valid?
-    assert_includes t.errors[:tournament_template_scoring_slots],
-                    "Big Fish Season tournaments must have exactly one species configured"
-  end
-
-  test "format enum includes hidden_length" do
-    walleye = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :hidden_length, mode: :solo)
-    tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-    assert tpl.valid?, tpl.errors.full_messages.inspect
-    assert tpl.format_hidden_length?
-  end
-
-  test "hidden_length template errors when no scoring slot is configured" do
-    tpl = build(:tournament_template, club: @club, format: :hidden_length, mode: :solo)
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:tournament_template_scoring_slots],
-                    "Hidden Length tournaments must have exactly one species configured"
-  end
-
-  test "hidden_length template errors with more than one scoring slot" do
-    walleye = create(:species, club: @club)
-    pike    = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :hidden_length, mode: :solo)
-    tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-    tpl.tournament_template_scoring_slots.build(species: pike, slot_count: 1)
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:tournament_template_scoring_slots],
-                    "Hidden Length tournaments must have exactly one species configured"
-  end
-
-  test "hidden_length template accepts team mode" do
-    walleye = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :hidden_length, mode: :team)
-    tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-    assert tpl.valid?, tpl.errors.full_messages.inspect
-  end
-
-  test "format enum includes biggest_vs_smallest" do
-    walleye = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :biggest_vs_smallest, mode: :solo)
-    tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-    assert tpl.valid?, tpl.errors.full_messages.inspect
-    assert tpl.format_biggest_vs_smallest?
-  end
-
-  test "biggest_vs_smallest template errors when no scoring slot is configured" do
-    tpl = build(:tournament_template, club: @club, format: :biggest_vs_smallest, mode: :solo)
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:tournament_template_scoring_slots],
-                    "Biggest vs Smallest tournaments must have exactly one species configured"
-  end
-
-  test "biggest_vs_smallest template errors with more than one scoring slot" do
-    walleye = create(:species, club: @club)
-    pike    = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :biggest_vs_smallest, mode: :solo)
-    tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-    tpl.tournament_template_scoring_slots.build(species: pike, slot_count: 1)
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:tournament_template_scoring_slots],
-                    "Biggest vs Smallest tournaments must have exactly one species configured"
-  end
-
-  test "biggest_vs_smallest template accepts team mode" do
-    walleye = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :biggest_vs_smallest, mode: :team)
-    tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-    assert tpl.valid?, tpl.errors.full_messages.inspect
-  end
-
-  test "format enum includes fish_train" do
-    walleye = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :fish_train, mode: :solo,
-                train_cars: [walleye.id, walleye.id, walleye.id])
-    tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-    assert tpl.valid?, tpl.errors.full_messages.inspect
-    assert tpl.format_fish_train?
-  end
-
-  test "fish_train template errors when no scoring slot is configured" do
-    tpl = build(:tournament_template, club: @club, format: :fish_train, mode: :solo,
-                train_cars: [1, 1, 1])
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:tournament_template_scoring_slots],
-                    "Fish Train tournaments must have between 1 and 3 species in the pool"
-  end
-
-  test "fish_train template errors when pool has more than 3 species" do
+  test "fish_train template validates its species pool and its car list" do
     s1 = create(:species, club: @club)
     s2 = create(:species, club: @club)
     s3 = create(:species, club: @club)
     s4 = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :fish_train, mode: :solo,
-                train_cars: [s1.id, s2.id, s3.id])
-    [s1, s2, s3, s4].each { |s| tpl.tournament_template_scoring_slots.build(species: s, slot_count: 1) }
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:tournament_template_scoring_slots],
-                    "Fish Train tournaments must have between 1 and 3 species in the pool"
+
+    {
+      "solo, 3 cars from a 1-species pool" => [:solo, [s1], [s1, s1, s1], nil, nil],
+      "team, 6 cars over a 2-species pool" => [:team, [s1, s2], [s1, s2, s1, s2, s1, s2], nil, nil],
+      "empty pool"                         => [:solo, [], [s1, s1, s1], :tournament_template_scoring_slots, "Fish Train tournaments must have between 1 and 3 species in the pool"],
+      "4-species pool"                     => [:solo, [s1, s2, s3, s4], [s1, s2, s3], :tournament_template_scoring_slots, "Fish Train tournaments must have between 1 and 3 species in the pool"],
+      "2-car train"                        => [:solo, [s1], [s1, s1], :train_cars, "Fish Train must have between 3 and 6 cars"],
+      "7-car train"                        => [:solo, [s1], [s1, s1, s1, s1, s1, s1, s1], :train_cars, "Fish Train must have between 3 and 6 cars"],
+      "car species off the pool"           => [:solo, [s1], [s1, s2, s1], :train_cars, "Fish Train cars must reference species in the pool"]
+    }.each do |label, (mode, pool, cars, attribute, message)|
+      tpl = build(:tournament_template, club: @club, format: :fish_train, mode: mode,
+                  train_cars: cars.map(&:id))
+      pool.each { |species| tpl.tournament_template_scoring_slots.build(species: species, slot_count: 1) }
+
+      if message
+        assert_not tpl.valid?, "#{label} should be invalid"
+        assert_includes tpl.errors[attribute], message, "#{label}: expected the #{attribute} message"
+      else
+        assert tpl.valid?, "#{label} should be valid: #{tpl.errors.full_messages.inspect}"
+        assert tpl.format_fish_train?, "#{label}: format_fish_train?"
+      end
+    end
   end
 
-  test "fish_train template errors when train length is out of 3..6 range" do
-    s = create(:species, club: @club)
-    short = build(:tournament_template, club: @club, format: :fish_train, mode: :solo,
-                  train_cars: [s.id, s.id])
-    short.tournament_template_scoring_slots.build(species: s, slot_count: 1)
-    long  = build(:tournament_template, club: @club, format: :fish_train, mode: :solo,
-                  train_cars: Array.new(7) { s.id })
-    long.tournament_template_scoring_slots.build(species: s, slot_count: 1)
-    assert_not short.valid?
-    assert_not long.valid?
-    assert_includes short.errors[:train_cars], "Fish Train must have between 3 and 6 cars"
-    assert_includes long.errors[:train_cars],  "Fish Train must have between 3 and 6 cars"
-  end
-
-  test "fish_train template errors when a car species is off-pool" do
-    pool   = create(:species, club: @club)
-    outsider = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :fish_train, mode: :solo,
-                train_cars: [pool.id, outsider.id, pool.id])
-    tpl.tournament_template_scoring_slots.build(species: pool, slot_count: 1)
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:train_cars],
-                    "Fish Train cars must reference species in the pool"
-  end
-
-  test "fish_train template accepts team mode and a valid 6-car train" do
-    s1 = create(:species, club: @club)
-    s2 = create(:species, club: @club)
-    tpl = build(:tournament_template, club: @club, format: :fish_train, mode: :team,
-                train_cars: [s1.id, s2.id, s1.id, s2.id, s1.id, s2.id])
-    [s1, s2].each { |sp| tpl.tournament_template_scoring_slots.build(species: sp, slot_count: 1) }
-    assert tpl.valid?, tpl.errors.full_messages.inspect
-  end
-
-  test "tagged template requires solo mode" do
+  test "tagged template requires solo mode and one Tagged Walleye scoring slot" do
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    tpl = build(:tournament_template, club: @club, format: :tagged, mode: :team)
-    tpl.tournament_template_scoring_slots.build(species: tagged, slot_count: 1)
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:format], "Tagged Walleye tournaments must be solo"
-  end
+    other  = create(:species, name: "Walleye Test #{SecureRandom.hex(2)}")
+    slot_error = "Tagged Walleye tournaments must have exactly one scoring slot for the Tagged Walleye species"
 
-  test "tagged template errors when scoring slot references a non-Tagged-Walleye species" do
-    Species.find_or_create_by!(name: "Tagged Walleye")
-    other = create(:species, name: "Walleye Test #{SecureRandom.hex(2)}")
-    tpl = build(:tournament_template, club: @club, format: :tagged, mode: :solo)
-    tpl.tournament_template_scoring_slots.build(species: other, slot_count: 1)
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:tournament_template_scoring_slots],
-                    "Tagged Walleye tournaments must have exactly one scoring slot for the Tagged Walleye species"
-  end
+    {
+      "solo with the Tagged Walleye slot" => [:solo, tagged, nil, nil],
+      "team mode"                         => [:team, tagged, :format, "Tagged Walleye tournaments must be solo"],
+      "slot for another species"          => [:solo, other, :tournament_template_scoring_slots, slot_error],
+      "no scoring slot"                   => [:solo, nil, :tournament_template_scoring_slots, slot_error]
+    }.each do |label, (mode, species, attribute, message)|
+      tpl = build(:tournament_template, club: @club, format: :tagged, mode: mode)
+      tpl.tournament_template_scoring_slots.build(species: species, slot_count: 1) if species
 
-  test "tagged template errors when no scoring slot is configured" do
-    Species.find_or_create_by!(name: "Tagged Walleye")
-    tpl = build(:tournament_template, club: @club, format: :tagged, mode: :solo)
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:tournament_template_scoring_slots],
-                    "Tagged Walleye tournaments must have exactly one scoring slot for the Tagged Walleye species"
-  end
-
-  test "tagged template accepts a single Tagged Walleye scoring slot in solo mode" do
-    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
-    tpl = build(:tournament_template, club: @club, format: :tagged, mode: :solo)
-    tpl.tournament_template_scoring_slots.build(species: tagged, slot_count: 1)
-    assert tpl.valid?, tpl.errors.full_messages.to_sentence
+      if message
+        assert_not tpl.valid?, "#{label} should be invalid"
+        assert_includes tpl.errors[attribute], message, "#{label}: expected the #{attribute} message"
+      else
+        assert tpl.valid?, "#{label} should be valid: #{tpl.errors.full_messages.to_sentence}"
+      end
+    end
   end
 
   test "pro_walleye template requires one Walleye scoring slot" do
@@ -284,81 +181,60 @@ class TournamentTemplateTest < ActiveSupport::TestCase
     assert_equal Catches::ProWalleye::BASKET_SIZE, tmpl.tournament_template_scoring_slots.first.slot_count
   end
 
-  test "progressive_length template errors with more than one scoring slot" do
+  test "progressive_length template requires exactly one scoring slot" do
     walleye = Species.find_or_create_by!(name: "Walleye")
     pike    = Species.find_or_create_by!(name: "Pike")
-    tpl = build(:tournament_template, club: @club, format: :progressive_length, mode: :solo)
-    tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-    tpl.tournament_template_scoring_slots.build(species: pike, slot_count: 1)
-    assert_not tpl.valid?
-    assert_includes tpl.errors[:tournament_template_scoring_slots],
-                    "Progressive Length tournaments must have exactly one species configured"
+
+    {
+      "one species"  => [[walleye], nil],
+      "two species"  => [[walleye, pike], "Progressive Length tournaments must have exactly one species configured"]
+    }.each do |label, (pool, message)|
+      tpl = build(:tournament_template, club: @club, format: :progressive_length, mode: :solo)
+      pool.each { |species| tpl.tournament_template_scoring_slots.build(species: species, slot_count: 1) }
+
+      if message
+        assert_not tpl.valid?, "#{label} should be invalid"
+        assert_includes tpl.errors[:tournament_template_scoring_slots], message,
+                        "#{label}: expected the scoring slots message"
+      else
+        assert tpl.valid?, "#{label} should be valid: #{tpl.errors.full_messages.inspect}"
+      end
+    end
   end
 
-  test "progressive_length template accepts exactly one scoring slot" do
-    walleye = Species.find_or_create_by!(name: "Walleye")
-    tpl = build(:tournament_template, club: @club, format: :progressive_length, mode: :solo)
-    tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-    assert tpl.valid?, tpl.errors.full_messages.inspect
-  end
-
-  test "pairing is mirrored onto the partner" do
+  test "pairing is mirrored onto the partner and unpairing clears both sides" do
     club = create(:club)
     main = create(:tournament_template, club: club, name: "Main", mode: :team)
     side = create(:tournament_template, club: club, name: "Side", mode: :team)
 
     main.update!(paired_template: side)
-
-    assert_equal side, main.reload.paired_template
-    assert_equal main, side.reload.paired_template
-    assert main.paired?
-  end
-
-  test "unpairing clears both sides" do
-    club = create(:club)
-    main = create(:tournament_template, club: club, name: "Main", mode: :team)
-    side = create(:tournament_template, club: club, name: "Side", mode: :team)
-    main.update!(paired_template: side)
+    assert_equal side, main.reload.paired_template, "main points at side"
+    assert_equal main, side.reload.paired_template, "the pairing is mirrored onto side"
+    assert main.paired?, "main is paired?"
 
     main.update!(paired_template: nil)
-
-    assert_nil main.reload.paired_template
-    assert_nil side.reload.paired_template
+    assert_nil main.reload.paired_template, "unpairing clears main"
+    assert_nil side.reload.paired_template, "unpairing clears side too"
   end
 
-  test "a template can't pair with itself" do
-    template = create(:tournament_template, mode: :team)
-    template.paired_template_id = template.id
-    assert_not template.valid?
-    assert_includes template.errors[:paired_template], "can't be the same template"
-  end
-
-  test "a template can't pair across clubs" do
-    mine = create(:tournament_template, club: create(:club), mode: :team)
-    theirs = create(:tournament_template, club: create(:club), mode: :team)
-    mine.paired_template = theirs
-    assert_not mine.valid?
-    assert_includes mine.errors[:paired_template], "must belong to the same club"
-  end
-
-  test "a template already paired to someone else can't be taken" do
+  test "invalid pairing targets are rejected" do
     club = create(:club)
-    main = create(:tournament_template, club: club, name: "Main", mode: :team)
-    side = create(:tournament_template, club: club, name: "Side", mode: :team)
-    third = create(:tournament_template, club: club, name: "Third", mode: :team)
-    main.update!(paired_template: side)
+    taken_main = create(:tournament_template, club: club, name: "Taken Main", mode: :team)
+    taken_side = create(:tournament_template, club: club, name: "Taken Side", mode: :team)
+    taken_main.update!(paired_template: taken_side)
+    other_club_template = create(:tournament_template, club: create(:club), mode: :team)
 
-    third.paired_template = side
-    assert_not third.valid?
-    assert_includes third.errors[:paired_template], "is already paired with another template"
-  end
-
-  test "a dangling paired_template_id is invalid" do
-    template = create(:tournament_template, mode: :team)
-    template.paired_template_id = TournamentTemplate.maximum(:id).to_i + 1
-
-    assert_not template.valid?
-    assert_includes template.errors[:paired_template], "must exist"
+    {
+      "itself"                     => [->(template) { template.id }, "can't be the same template"],
+      "a template in another club" => [->(_template) { other_club_template.id }, "must belong to the same club"],
+      "an already-paired template" => [->(_template) { taken_side.id }, "is already paired with another template"],
+      "a template that is gone"    => [->(_template) { TournamentTemplate.maximum(:id).to_i + 1 }, "must exist"]
+    }.each do |label, (target, message)|
+      template = create(:tournament_template, club: club, mode: :team)
+      template.paired_template_id = target.call(template)
+      assert_not template.valid?, "pairing with #{label} should be invalid"
+      assert_includes template.errors[:paired_template], message, "pairing with #{label}: expected the message"
+    end
   end
 
   # A league night's two tournaments share a roster through a link group, which

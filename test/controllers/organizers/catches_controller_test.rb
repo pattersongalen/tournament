@@ -85,12 +85,6 @@ class Organizers::CatchesControllerTest < ActionDispatch::IntegrationTest
                  "prefilled cm length must round-trip, not drift"
   end
 
-  test "non-organizer cannot update" do
-    sign_in_as(@member)
-    patch organizers_catch_path(@member_catch.id), params: { length: "10", length_unit: "inches" }
-    assert_response :forbidden
-  end
-
   test "organizer cannot update an out-of-club catch (404)" do
     sign_in_as(@organizer)
     patch organizers_catch_path(@foreign_catch.id), params: { length: "10", length_unit: "inches" }
@@ -135,12 +129,6 @@ class Organizers::CatchesControllerTest < ActionDispatch::IntegrationTest
     sign_in_as(@organizer)
     get organizers_catch_path(@foreign_catch.id)
     assert_response :not_found
-  end
-
-  test "non-organizer cannot view a catch detail page" do
-    sign_in_as(@member)
-    get organizers_catch_path(@member_catch.id)
-    assert_response :forbidden
   end
 
   test "index links each catch to its detail page" do

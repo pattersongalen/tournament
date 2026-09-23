@@ -126,6 +126,13 @@ class Organizers::LeagueNightsControllerTest < ActionDispatch::IntegrationTest
     side_t = Tournament.find_by(template_source_id: @side.id)
     assert_equal main_t.link_group_id, side_t.link_group_id
     assert_redirected_to edit_organizers_tournament_path(main_t)
+
+    # The "Linked with" heading is unconditional, but the blurb beneath it only
+    # renders when the tournament actually has a linked partner -- follow the
+    # redirect to prove the partial renders it, not just that we landed there.
+    follow_redirect!
+    assert_select "h3", text: "Linked with"
+    assert_match(/Entries are shared\. Adding a boat here adds it there\./, response.body)
   end
 
   # The range fields are only meaningful for Random Bag, and only Random Bag

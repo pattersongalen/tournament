@@ -21,113 +21,73 @@ module TournamentTemplates
       assert_equal @template.id, tournament.template_source_id
     end
 
-    test "carries awards_season_points from template onto cloned tournament" do
-      template = create(:tournament_template, club: @club, awards_season_points: true)
-      tournament = Clone.call(
-        template: template,
-        starts_at: 1.day.from_now,
-        ends_at: 1.day.from_now + 4.hours
+    test "carries awards_season_points and blind_leaderboard flags from template to tournament, true and false" do
+      on = create(:tournament_template, club: @club, awards_season_points: true)
+      tournament_on = Clone.call(template: on, starts_at: 1.day.from_now, ends_at: 1.day.from_now + 4.hours)
+      assert tournament_on.awards_season_points?, "awards_season_points: true should carry over"
+
+      off = create(:tournament_template, club: @club, awards_season_points: false)
+      tournament_off = Clone.call(template: off, starts_at: 1.day.from_now, ends_at: 1.day.from_now + 4.hours)
+      refute tournament_off.awards_season_points?, "awards_season_points: false should carry over"
+
+      blind_on = create(:tournament_template, club: @club, blind_leaderboard: true)
+      cloned_blind_on = TournamentTemplates::Clone.call(
+        template: blind_on, starts_at: 1.hour.from_now, ends_at: 4.hours.from_now, name: "League Night"
       )
-      assert tournament.awards_season_points?
-    end
+      assert cloned_blind_on.blind_leaderboard?, "blind_leaderboard: true should carry over"
 
-    test "does not award season points by default when template flag is off" do
-      template = create(:tournament_template, club: @club, awards_season_points: false)
-      tournament = Clone.call(
-        template: template,
-        starts_at: 1.day.from_now,
-        ends_at: 1.day.from_now + 4.hours
+      blind_off = create(:tournament_template, club: @club, blind_leaderboard: false)
+      cloned_blind_off = TournamentTemplates::Clone.call(
+        template: blind_off, starts_at: 1.hour.from_now, ends_at: 4.hours.from_now
       )
-      refute tournament.awards_season_points?
+      assert_not cloned_blind_off.blind_leaderboard?, "blind_leaderboard: false should carry over"
     end
 
-    test "carries blind_leaderboard from template to tournament" do
-      club = create(:club)
-      template = create(:tournament_template, club: club, blind_leaderboard: true)
+    test "clones template format (and its scoring slots) onto the new tournament" do
+      cases = {
+        "big_fish_season" => -> {
+          template = build(:tournament_template, club: @club, format: :big_fish_season)
+          template.tournament_template_scoring_slots.build(species: @walleye, slot_count: 3)
+          template.save!
+          template
+        },
+        "standard (default)" => -> {
+          template = create(:tournament_template, club: @club)
+          template.tournament_template_scoring_slots.create!(species: @walleye, slot_count: 1)
+          template
+        },
+        "hidden_length" => -> {
+          walleye = create(:species, club: @club)
+          tpl = build(:tournament_template, club: @club, name: "Hidden Length Wed",
+                      format: :hidden_length, mode: :solo)
+          tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
+          tpl.save!
+          tpl
+        },
+        "biggest_vs_smallest" => -> {
+          walleye = create(:species, club: @club)
+          tpl = build(:tournament_template, club: @club, name: "BvS Wed",
+                      format: :biggest_vs_smallest, mode: :solo)
+          tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
+          tpl.save!
+          tpl
+        }
+      }
 
-      tournament = TournamentTemplates::Clone.call(
-        template: template,
-        starts_at: 1.hour.from_now,
-        ends_at: 4.hours.from_now,
-        name: "League Night"
-      )
+      cases.each do |label, build_template|
+        template = build_template.call
+        tournament = TournamentTemplates::Clone.call(
+          template: template, starts_at: 1.day.from_now, ends_at: 2.days.from_now
+        )
 
-      assert tournament.blind_leaderboard?
-    end
-
-    test "does not flip blind_leaderboard on if template has it off" do
-      club = create(:club)
-      template = create(:tournament_template, club: club, blind_leaderboard: false)
-
-      tournament = TournamentTemplates::Clone.call(
-        template: template,
-        starts_at: 1.hour.from_now,
-        ends_at: 4.hours.from_now
-      )
-
-      assert_not tournament.blind_leaderboard?
-    end
-
-    test "clones template format onto the new tournament" do
-      template = build(:tournament_template, club: @club, format: :big_fish_season)
-      template.tournament_template_scoring_slots.build(species: @walleye, slot_count: 3)
-      template.save!
-
-      tournament = TournamentTemplates::Clone.call(
-        template: template,
-        starts_at: 1.day.from_now,
-        ends_at: 2.days.from_now
-      )
-
-      assert_equal "big_fish_season", tournament.format
-      assert tournament.format_big_fish_season?
-    end
-
-    test "default standard format clones onto the new tournament" do
-      template = create(:tournament_template, club: @club)
-      template.tournament_template_scoring_slots.create!(species: @walleye, slot_count: 1)
-
-      tournament = TournamentTemplates::Clone.call(
-        template: template,
-        starts_at: 1.day.from_now,
-        ends_at: 2.days.from_now
-      )
-
-      assert_equal "standard", tournament.format
-    end
-
-    test "copies hidden_length format and its single scoring slot to the cloned tournament" do
-      walleye = create(:species, club: @club)
-      tpl = build(:tournament_template, club: @club, name: "Hidden Length Wed",
-                  format: :hidden_length, mode: :solo)
-      tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-      tpl.save!
-
-      cloned = Clone.call(template: tpl,
-                          starts_at: 1.day.from_now,
-                          ends_at:   1.day.from_now + 4.hours)
-
-      assert cloned.persisted?
-      assert cloned.format_hidden_length?
-      assert_equal 1, cloned.scoring_slots.count
-      assert_equal walleye, cloned.scoring_slots.first.species
-    end
-
-    test "copies biggest_vs_smallest format and its single scoring slot to the cloned tournament" do
-      walleye = create(:species, club: @club)
-      tpl = build(:tournament_template, club: @club, name: "BvS Wed",
-                  format: :biggest_vs_smallest, mode: :solo)
-      tpl.tournament_template_scoring_slots.build(species: walleye, slot_count: 1)
-      tpl.save!
-
-      cloned = Clone.call(template: tpl,
-                          starts_at: 1.day.from_now,
-                          ends_at:   1.day.from_now + 4.hours)
-
-      assert cloned.persisted?
-      assert cloned.format_biggest_vs_smallest?
-      assert_equal 1, cloned.scoring_slots.count
-      assert_equal walleye, cloned.scoring_slots.first.species
+        assert tournament.persisted?, "#{label}: should persist"
+        assert_equal template.format, tournament.format, "#{label}: format should carry over"
+        assert_equal template.tournament_template_scoring_slots.count, tournament.scoring_slots.count,
+                     "#{label}: scoring slot count should carry over"
+        assert_equal template.tournament_template_scoring_slots.map(&:species_id).sort,
+                     tournament.scoring_slots.map(&:species_id).sort,
+                     "#{label}: scoring slot species should carry over"
+      end
     end
 
     test "copies fish_train format and train_cars to the cloned tournament" do

@@ -7,29 +7,22 @@ class NotificationSettingsControllerTest < ActionDispatch::IntegrationTest
     sign_in_as(@user)
   end
 
-  test "POST /notification_settings/snooze sets muted_until" do
+  test "snooze sets muted_until, unmute clears it" do
     post snooze_notification_settings_path, params: { hours: 4 }
-    @sub.reload
-    assert_in_delta 4.hours.from_now, @sub.muted_until, 60
-  end
+    assert_in_delta 4.hours.from_now, @sub.reload.muted_until, 60, "snooze"
 
-  test "POST /notification_settings/unmute clears muted_until" do
-    @sub.update!(muted_until: 4.hours.from_now)
     post unmute_notification_settings_path
-    assert_nil @sub.reload.muted_until
+    assert_nil @sub.reload.muted_until, "unmute"
   end
 
-  test "POST /notification_settings/mute_tournament adds the tournament id" do
+  test "mute_tournament adds the tournament id, unmute_tournament removes it" do
     t = create(:tournament)
+
     post mute_tournament_notification_settings_path, params: { tournament_id: t.id }
-    assert_includes @sub.reload.muted_tournament_ids, t.id
-  end
+    assert_includes @sub.reload.muted_tournament_ids, t.id, "mute_tournament"
 
-  test "POST /notification_settings/unmute_tournament removes the tournament id" do
-    t = create(:tournament)
-    @sub.update!(muted_tournament_ids: [t.id])
     post unmute_tournament_notification_settings_path, params: { tournament_id: t.id }
-    assert_not_includes @sub.reload.muted_tournament_ids, t.id
+    assert_not_includes @sub.reload.muted_tournament_ids, t.id, "unmute_tournament"
   end
 
   private

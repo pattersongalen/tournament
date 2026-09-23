@@ -1,0 +1,41 @@
+<div class="mt-6 p-4 rounded-lg bg-slate-800 border border-slate-700">
+  <h2 class="text-lg font-semibold mb-2">How points are awarded</h2>
+
+  <% if club.season_points_scheme_full_field? %>
+    <p class="text-slate-300 text-sm mb-2">
+      In full-field scoring, every boat that scores earns points based on placement. With 8 boats out, first place gets 8, second 7, and so on down the field.
+    </p>
+  <% else %>
+    <table class="w-full text-sm mb-2">
+      <thead>
+        <tr class="text-left text-slate-300 border-b border-slate-700">
+          <th class="px-2 py-1">Boats out</th>
+          <th class="px-2 py-1">Points by placement</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (below = club.season_points_attendance_only_label) %>
+          <tr class="border-t border-slate-700">
+            <td class="px-2 py-1"><%= below %></td>
+            <td class="px-2 py-1 text-slate-400">attendance only</td>
+          </tr>
+        <% end %>
+        <% club.effective_season_points_bands.each do |band| %>
+          <% scale = Tournaments::PointsScale.call(club: club, entry_count: band[:sample]) %>
+          <tr class="border-t border-slate-700">
+            <td class="px-2 py-1"><%= band[:label] %></td>
+            <td class="px-2 py-1 font-mono">
+              <%= scale ? scale.map { |amount| format_season_points(amount) }.join(", ") : "—" %>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+
+  <p class="text-slate-400 text-sm">
+    Everyone who fishes earns <%= format_season_points(club.season_points_attendance) %> points
+    for showing up. Placement points need at least
+    <%= club.season_points_min_entries %> <%= "entry".pluralize(club.season_points_min_entries) %>.
+  </p>
+</div>

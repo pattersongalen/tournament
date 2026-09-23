@@ -73,7 +73,7 @@
       <%= f.check_box :awards_season_points, class: "h-5 w-5" %>
       <span class="text-slate-200">Awards season points</span>
     </label>
-    <p class="text-xs text-slate-500 -mt-2">When on, this tournament contributes to the season points leaderboard (using its season tag). Top finishers earn points based on the angler count.</p>
+    <p class="text-xs text-slate-500 -mt-2">When on, this tournament contributes to the season points leaderboard (using its season tag). Top finishers earn points based on how many entries (boats or teams) fished.</p>
 
     <% blind_locked = @tournament.persisted? && @tournament.starts_at && @tournament.starts_at <= Time.current %>
     <% if blind_locked %>

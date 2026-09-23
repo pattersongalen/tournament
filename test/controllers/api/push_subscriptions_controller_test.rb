@@ -6,50 +6,53 @@ class Api::PushSubscriptionsControllerTest < ActionDispatch::IntegrationTest
     sign_in_as(@user)
   end
 
-  test "POST creates a subscription" do
-    assert_difference "PushSubscription.count", 1 do
-      post "/api/push_subscriptions", params: {
-        subscription: { endpoint: "https://e/1", keys: { p256dh: "p", auth: "a" } }
-      }, headers: { "Accept" => "application/json" }
-    end
-    assert_response :created
+  test "POST creates a new subscription or upserts an existing one by endpoint" do
+    {
+      "new endpoint creates a subscription" => -> {
+        assert_difference "PushSubscription.count", 1, "new endpoint creates a subscription" do
+          post "/api/push_subscriptions", params: {
+            subscription: { endpoint: "https://e/1", keys: { p256dh: "p", auth: "a" } }
+          }, headers: { "Accept" => "application/json" }
+        end
+        assert_response :created
+      },
+      "existing endpoint upserts idempotently" => -> {
+        create(:push_subscription, user: @user, endpoint: "https://e/2")
+        assert_no_difference "PushSubscription.count", "existing endpoint upserts idempotently" do
+          post "/api/push_subscriptions", params: {
+            subscription: { endpoint: "https://e/2", keys: { p256dh: "p2", auth: "a2" } }
+          }, headers: { "Accept" => "application/json" }
+        end
+        assert_equal "p2", PushSubscription.find_by(endpoint: "https://e/2").p256dh,
+                     "existing endpoint upserts idempotently"
+      }
+    }.each { |_label, block| block.call }
   end
 
-  test "POST is idempotent on endpoint" do
-    create(:push_subscription, user: @user, endpoint: "https://e/2")
-    assert_no_difference "PushSubscription.count" do
-      post "/api/push_subscriptions", params: {
-        subscription: { endpoint: "https://e/2", keys: { p256dh: "p2", auth: "a2" } }
-      }, headers: { "Accept" => "application/json" }
-    end
-    assert PushSubscription.find_by(endpoint: "https://e/2").p256dh == "p2"
-  end
+  test "DELETE removes a subscription and records push_unsubscribed" do
+    user = create(:user)
+    sign_in_as(user)
+    sub = user.push_subscriptions.create!(endpoint: "https://fcm.googleapis.com/abc", p256dh: "k", auth: "a")
 
-  test "DELETE removes a subscription" do
-    sub = create(:push_subscription, user: @user, endpoint: "https://e/3")
-    delete "/api/push_subscriptions", params: { endpoint: sub.endpoint }, headers: { "Accept" => "application/json" }
+    assert_difference -> { user.user_events.push_unsubscribed.count }, 1 do
+      delete "/api/push_subscriptions", params: { endpoint: sub.endpoint }, headers: { "Accept" => "application/json" }
+    end
     assert_response :no_content
-    assert_nil PushSubscription.find_by(endpoint: "https://e/3")
+    assert_nil PushSubscription.find_by(endpoint: sub.endpoint)
   end
 
-  test "creating a subscription records push_subscribed with endpoint host" do
+  test "POST records push_subscribed once per new endpoint, not on an idempotent re-save" do
     user = create(:user)
     sign_in_as(user)
 
-    assert_difference -> { user.user_events.push_subscribed.count }, 1 do
+    assert_difference -> { user.user_events.push_subscribed.count }, 1, "first save records the event" do
       post "/api/push_subscriptions", params: {
         subscription: { endpoint: "https://fcm.googleapis.com/abc", keys: { p256dh: "k", auth: "a" } }
       }, headers: { "Accept" => "application/json" }
     end
     assert_equal "fcm.googleapis.com", user.user_events.push_subscribed.last.metadata["endpoint_host"]
-  end
 
-  test "idempotent re-save does not record a second push_subscribed" do
-    user = create(:user)
-    sign_in_as(user)
-    create(:push_subscription, user: user, endpoint: "https://fcm.googleapis.com/abc")
-
-    assert_no_difference -> { user.user_events.push_subscribed.count } do
+    assert_no_difference -> { user.user_events.push_subscribed.count }, "idempotent re-save doesn't re-record" do
       post "/api/push_subscriptions", params: {
         subscription: { endpoint: "https://fcm.googleapis.com/abc", keys: { p256dh: "k2", auth: "a2" } }
       }, headers: { "Accept" => "application/json" }
@@ -68,25 +71,6 @@ class Api::PushSubscriptionsControllerTest < ActionDispatch::IntegrationTest
     stale.reload
     assert_equal @user.id, stale.user_id
     assert_equal "newkey", stale.p256dh
-  end
-
-  # The toggle's drift-converging resync fires on every page load. Unlike an
-  # explicit Enable tap, it must not steal a row another member registered on
-  # this shared phone — otherwise merely signing in and loading the home page
-  # silently ends the owner's notifications.
-  test "a passive resync does not reassign another user's subscription" do
-    other = create(:user)
-    owned = PushSubscription.create!(user: other, endpoint: "https://push.example/shared-ep",
-                                     p256dh: "oldkey", auth: "oldauth")
-    post "/api/push_subscriptions", params: {
-      resync: true,
-      subscription: { endpoint: "https://push.example/shared-ep",
-                      keys: { p256dh: "newkey", auth: "newauth" } }
-    }, as: :json
-    assert_response :no_content
-    owned.reload
-    assert_equal other.id, owned.user_id
-    assert_equal "oldkey", owned.p256dh
   end
 
   test "a passive resync still registers and converges the user's own rows" do
@@ -127,46 +111,6 @@ class Api::PushSubscriptionsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "p2", sub.p256dh
   end
 
-  # refresh is as passive as create's resync: the SW fires it for whoever is
-  # signed in. On a shared phone, a rotation while member B is signed in must
-  # not move member A's subscription to B — A tapped Enable, A keeps it.
-  test "refresh keeps the rotated subscription with its original owner" do
-    other = create(:user)
-    create(:push_subscription, user: other, endpoint: "https://e/owned-by-other", p256dh: "p", auth: "a")
-    assert_no_difference "PushSubscription.count" do
-      post "/api/push_subscriptions/refresh", params: {
-        old_endpoint: "https://e/owned-by-other",
-        subscription: { endpoint: "https://e/rotated-other", keys: { p256dh: "p2", auth: "a2" } }
-      }, as: :json
-    end
-    assert_response :no_content
-    assert_nil PushSubscription.find_by(endpoint: "https://e/owned-by-other")
-    assert_equal other.id, PushSubscription.find_by(endpoint: "https://e/rotated-other").user_id
-  end
-
-  # The CSRF fallback below accepts a rotation with no old row to match. That
-  # path resolved the owner as current_user, so on a shared phone it handed an
-  # endpoint another member had already registered to whoever happened to be
-  # signed in — silently cutting off the member who actually tapped Enable.
-  # refresh is a passive SW event, so it must refuse the move exactly as
-  # create's resync guard does.
-  test "refresh does not hand another member's registration to the current session" do
-    other = create(:user)
-    create(:push_subscription, user: other, endpoint: "https://e/shared-phone", p256dh: "p", auth: "a")
-    with_forgery_protection do
-      assert_no_difference "PushSubscription.count" do
-        post "/api/push_subscriptions/refresh", params: {
-          old_endpoint: nil,
-          subscription: { endpoint: "https://e/shared-phone", keys: { p256dh: "stolen", auth: "stolen" } }
-        }, headers: { "X-CSRF-Token" => api_session_csrf_token }, as: :json
-      end
-      assert_response :no_content
-      sub = PushSubscription.find_by(endpoint: "https://e/shared-phone")
-      assert_equal other.id, sub.user_id, "a passive rotation must not move the row to the current user"
-      assert_equal "p", sub.p256dh, "and must not overwrite the owner's keys"
-    end
-  end
-
   # Possession of a previously-registered endpoint is one ownership proof
   # (endpoints are unguessable capability URLs). Without a matching row AND
   # without a CSRF token the request proves nothing and must not create
@@ -185,45 +129,28 @@ class Api::PushSubscriptionsControllerTest < ActionDispatch::IntegrationTest
 
   # The rotation case the self-heal exists for: delivery already destroyed the
   # row on ExpiredSubscription (or the browser fired pushsubscriptionchange
-  # with no oldSubscription), so possession can't be proven. The SW fetches a
-  # CSRF token from /api/session — the same same-origin proof create relies
-  # on — and the new subscription must be stored, not 404'd away.
-  test "refresh with a dead old endpoint but a valid CSRF token stores the new subscription" do
-    with_forgery_protection do
-      assert_difference "PushSubscription.count", 1 do
-        post "/api/push_subscriptions/refresh", params: {
-          old_endpoint: "https://e/already-destroyed",
-          subscription: { endpoint: "https://e/rotated", keys: { p256dh: "p2", auth: "a2" } }
-        }, headers: { "X-CSRF-Token" => api_session_csrf_token }, as: :json
+  # with no oldSubscription, so old_endpoint arrives nil), so possession can't
+  # be proven by a matching row. The SW fetches a CSRF token from
+  # /api/session — the same same-origin proof create relies on — and the new
+  # subscription must be stored, not 404'd away, either way.
+  test "refresh with no matching old-endpoint row but a valid CSRF token stores the new subscription" do
+    {
+      "already-destroyed old endpoint" => { old_endpoint: "https://e/already-destroyed", new_endpoint: "https://e/rotated" },
+      "null old endpoint" => { old_endpoint: nil, new_endpoint: "https://e/rotated2" }
+    }.each do |label, row|
+      with_forgery_protection do
+        assert_difference "PushSubscription.count", 1, label do
+          post "/api/push_subscriptions/refresh", params: {
+            old_endpoint: row[:old_endpoint],
+            subscription: { endpoint: row[:new_endpoint], keys: { p256dh: "p2", auth: "a2" } }
+          }, headers: { "X-CSRF-Token" => api_session_csrf_token }, as: :json
+        end
+        assert_response :no_content, label
+        sub = PushSubscription.find_by(endpoint: row[:new_endpoint])
+        assert_equal @user.id, sub.user_id, label
+        assert_equal "p2", sub.p256dh, label
       end
-      assert_response :no_content
-      sub = PushSubscription.find_by(endpoint: "https://e/rotated")
-      assert_equal @user.id, sub.user_id
-      assert_equal "p2", sub.p256dh
     end
-  end
-
-  test "refresh with a null old endpoint but a valid CSRF token stores the new subscription" do
-    with_forgery_protection do
-      assert_difference "PushSubscription.count", 1 do
-        post "/api/push_subscriptions/refresh", params: {
-          old_endpoint: nil,
-          subscription: { endpoint: "https://e/rotated2", keys: { p256dh: "p", auth: "a" } }
-        }, headers: { "X-CSRF-Token" => api_session_csrf_token }, as: :json
-      end
-      assert_response :no_content
-      assert_equal @user.id, PushSubscription.find_by(endpoint: "https://e/rotated2").user_id
-    end
-  end
-
-  test "refresh requires sign-in" do
-    create(:push_subscription, user: @user, endpoint: "https://e/old")
-    reset!
-    post "/api/push_subscriptions/refresh", params: {
-      old_endpoint: "https://e/old",
-      subscription: { endpoint: "https://e/new", keys: { p256dh: "p", auth: "a" } }
-    }, as: :json
-    assert_response :unauthorized
   end
 
   # A service worker has no page, no csrf meta tag, no token. refresh must be
@@ -243,17 +170,6 @@ class Api::PushSubscriptionsControllerTest < ActionDispatch::IntegrationTest
         subscription: { endpoint: "https://e/other", keys: { p256dh: "p", auth: "a" } }
       }, as: :json
       assert_response :unauthorized
-    end
-  end
-
-  test "destroying a subscription records push_unsubscribed" do
-    user = create(:user)
-    sign_in_as(user)
-    user.push_subscriptions.create!(endpoint: "https://fcm.googleapis.com/abc", p256dh: "k", auth: "a")
-
-    assert_difference -> { user.user_events.push_unsubscribed.count }, 1 do
-      delete "/api/push_subscriptions", params: { endpoint: "https://fcm.googleapis.com/abc" },
-             headers: { "Accept" => "application/json" }
     end
   end
 

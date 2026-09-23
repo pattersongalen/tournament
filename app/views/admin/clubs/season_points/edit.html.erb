@@ -1,0 +1,126 @@
+<div class="mb-6">
+  <h1 class="text-3xl font-bold">Season points — <%= @foreign_club.name %></h1>
+  <p class="text-slate-400 mt-1">
+    Field size counts <strong>entries</strong> — boats or teams, not anglers. Changes apply to the
+    whole current season the next time standings are viewed.
+  </p>
+</div>
+
+<% if @foreign_club.errors.any? %>
+  <div class="mb-6 p-4 rounded-lg bg-red-500/20 border border-red-500/40 text-red-200">
+    <ul class="list-disc list-inside">
+      <% @foreign_club.errors.full_messages.each do |message| %>
+        <li><%= message %></li>
+      <% end %>
+    </ul>
+  </div>
+<% end %>
+
+<%= form_with url: admin_club_season_points_path(@foreign_club), method: :patch,
+              data: { controller: "season-points-scheme" } do |f| %>
+  <fieldset class="mb-6">
+    <legend class="text-sm text-slate-300 mb-2">Scheme</legend>
+    <div class="space-y-3">
+      <% [
+           ["tiered_ladders", "Tiered ladders", "A separate list of amounts for each field-size band."],
+           ["base_ladder", "Base ladder × tier multiplier", "One list of amounts, multiplied up for bigger fields."],
+           ["full_field", "Full-field descending", "8 boats out pays 8, 7, 6, 5, 4, 3, 2, 1. Ignores the ladders below."]
+         ].each do |value, label, hint| %>
+        <label class="flex items-start gap-3 text-slate-100">
+          <%= radio_button_tag "club[season_points_scheme]", value,
+                @foreign_club.season_points_scheme == value,
+                id: "scheme_#{value}", class: "h-4 w-4 mt-1",
+                data: { season_points_scheme_target: "radio", action: "change->season-points-scheme#refresh" } %>
+          <span>
+            <span class="font-medium"><%= label %></span>
+            <span class="block text-sm text-slate-400"><%= hint %></span>
+          </span>
+        </label>
+      <% end %>
+    </div>
+  </fieldset>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div>
+      <label class="block text-sm text-slate-300 mb-1">Attendance points (everyone who fished)</label>
+      <%= number_field_tag "club[season_points_attendance]", @foreign_club.season_points_attendance,
+            step: "0.01", min: "0",
+            class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100" %>
+    </div>
+    <div>
+      <label class="block text-sm text-slate-300 mb-1">Minimum entries for placement points</label>
+      <%= number_field_tag "club[season_points_min_entries]", @foreign_club.season_points_min_entries,
+            step: "1", min: "1",
+            class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100" %>
+    </div>
+  </div>
+
+  <fieldset class="mb-6" data-season-points-scheme-target="tieredLadders">
+    <legend class="text-sm text-slate-300 mb-2">Ladders — amounts per placement, highest first</legend>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <% Club.season_points_bands.each_with_index do |band, i| %>
+        <div>
+          <label class="block text-sm text-slate-400 mb-1"><%= band[:label] %> entries</label>
+          <%= text_field_tag "club[season_points_ladders_text][]", @foreign_club.season_points_ladder_text(i),
+                class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100 font-mono" %>
+        </div>
+      <% end %>
+    </div>
+    <p class="text-sm text-slate-400 mt-2">
+      As many places as you list: <span class="font-mono">9, 6, 3</span> pays the top three,
+      <span class="font-mono">10, 8, 6, 5, 4</span> pays the top five.
+    </p>
+  </fieldset>
+
+  <fieldset class="mb-6" data-season-points-scheme-target="baseLadder">
+    <legend class="text-sm text-slate-300 mb-2">Base ladder and tier multipliers</legend>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-sm text-slate-400 mb-1">Base ladder</label>
+        <%= text_field_tag "club[season_points_base_ladder_text]", @foreign_club.season_points_base_ladder_text,
+              class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100 font-mono" %>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-400 mb-1">Multipliers (<%= Club.season_points_bands.map { |b| b[:label] }.join(", ") %>)</label>
+        <%= text_field_tag "club[season_points_tier_multipliers_text]", @foreign_club.season_points_tier_multipliers_text,
+              class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100 font-mono" %>
+      </div>
+    </div>
+  </fieldset>
+
+  <div class="flex gap-3">
+    <%= f.submit "Save season points", class: "h-12 px-6 rounded-lg bg-blue-600 active:bg-blue-700 text-white font-semibold" %>
+    <%= link_to "Cancel", admin_club_path(@foreign_club), class: "h-12 px-6 rounded-lg bg-slate-700 text-slate-100 leading-[3rem]" %>
+  </div>
+<% end %>
+
+<div class="mt-10">
+  <h2 class="text-xl font-semibold mb-2">What the saved settings pay</h2>
+  <p class="text-slate-400 text-sm mb-3">Placement points only. Every angler who fished also gets
+    <%= format_season_points(@preview_club.season_points_attendance) %> attendance points.</p>
+  <table class="w-full text-base">
+    <thead>
+      <tr class="text-left text-sm text-slate-300 border-b border-slate-700">
+        <th class="px-3 py-2">Field size</th>
+        <th class="px-3 py-2">Points by placement</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% if (below = @preview_club.season_points_attendance_only_label) %>
+        <tr class="border-t border-slate-700">
+          <td class="px-3 py-3"><%= below %> entries</td>
+          <td class="px-3 py-3 font-mono">attendance only</td>
+        </tr>
+      <% end %>
+      <% @preview_club.effective_season_points_bands.each do |band| %>
+        <% scale = Tournaments::PointsScale.call(club: @preview_club, entry_count: band[:sample]) %>
+        <tr class="border-t border-slate-700">
+          <td class="px-3 py-3"><%= band[:label] %> entries</td>
+          <td class="px-3 py-3 font-mono">
+            <%= scale ? scale.map { |amount| format_season_points(amount) }.join(", ") : "attendance only" %>
+          </td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>

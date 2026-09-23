@@ -51,4 +51,9 @@
     <h2 class="text-xl font-semibold text-white mb-2">Banner</h2>
     <p class="text-slate-400 text-sm">A home-page message shown to selected members.</p>
   <% end %>
+
+  <%= link_to edit_admin_club_season_points_path(@club), class: "block p-6 bg-slate-800 rounded-xl border border-slate-700 hover:border-slate-500 transition-colors" do %>
+    <h2 class="text-xl font-semibold text-white mb-2">Season points</h2>
+    <p class="text-slate-400 text-sm">How many points each placement is worth, and the attendance bonus.</p>
+  <% end %>
 </div>

@@ -1,5 +1,11 @@
 require "test_helper"
 
+# #show and #update are the shared CatchDetailEditing concern (also included
+# by Organizers::CatchesController, which carries the full behavioural suite
+# for editing: unit-snap, invalid-length handling, out-of-club 404, the
+# non-organizer gates). This file keeps one smoke each for #show and #update
+# and stays thorough on #index, which is admin-only filtering/scoping logic
+# that has no organizers-side twin.
 class Admin::CatchesControllerTest < ActionDispatch::IntegrationTest
   setup do
     @club = create(:club)
@@ -37,6 +43,7 @@ class Admin::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_select "ul.grid li *", text: /Other Member/, count: 0
   end
 
+  # update smoke
   test "organizer can update an in-club catch's length and species" do
     walleye = create(:species)
     sign_in_as(@organizer)
@@ -51,38 +58,7 @@ class Admin::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_equal walleye.id, @member_catch.species_id
   end
 
-  test "update snaps cm entry to the quarter grid and converts to inches" do
-    sign_in_as(@organizer)
-    # 50.1 cm snaps to 50.0 cm; 50.0 / 2.54 = 19.685...
-    patch admin_catch_path(@member_catch.id), params: {
-      length: "50.1", length_unit: "centimeters", note: "cm"
-    }
-    @member_catch.reload
-    assert_equal "centimeters", @member_catch.length_unit
-    assert_in_delta 19.685, @member_catch.length_inches.to_f, 0.01
-  end
-
-  test "update with an invalid length redirects with an alert instead of 500" do
-    sign_in_as(@organizer)
-    patch admin_catch_path(@member_catch.id), params: { length: "0", length_unit: "inches" }
-
-    assert_redirected_to admin_catch_path(@member_catch.id)
-    assert_not_nil flash[:alert]
-    assert_equal 22.5, @member_catch.reload.length_inches.to_f, "invalid edit should not persist"
-  end
-
-  test "non-organizer cannot update" do
-    sign_in_as(@member)
-    patch admin_catch_path(@member_catch.id), params: { length: "10", length_unit: "inches" }
-    assert_response :forbidden
-  end
-
-  test "organizer cannot update an out-of-club catch (404)" do
-    sign_in_as(@organizer)
-    patch admin_catch_path(@foreign_catch.id), params: { length: "10", length_unit: "inches" }
-    assert_response :not_found
-  end
-
+  # show smoke
   test "organizer sees the edit form on an in-club catch detail page" do
     sign_in_as(@organizer)
     get admin_catch_path(@member_catch.id)
@@ -90,29 +66,6 @@ class Admin::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_select "select[name=species_id]"
     assert_select "input[name=length]"
     assert_includes response.body, "Club Carl"
-  end
-
-  test "edit form defaults the unit toggle to the catch's own logged unit, not the organizer's" do
-    # @organizer prefers inches (factory default); the catch was logged in cm.
-    # The form must seed from the catch's unit so an untouched length round-trips
-    # instead of being re-snapped/flipped on a species- or note-only edit.
-    @member_catch.update!(length_unit: "centimeters")
-    sign_in_as(@organizer)
-    get admin_catch_path(@member_catch.id)
-    assert_select "input[name=length_unit][value=centimeters][checked=checked]"
-    assert_select "input[name=length_unit][value=inches][checked=checked]", count: 0
-  end
-
-  test "detail page 404s for an out-of-club catch" do
-    sign_in_as(@organizer)
-    get admin_catch_path(@foreign_catch.id)
-    assert_response :not_found
-  end
-
-  test "non-organizer cannot view a catch detail page" do
-    sign_in_as(@member)
-    get admin_catch_path(@member_catch.id)
-    assert_response :forbidden
   end
 
   test "index links each catch to its detail page" do

@@ -11,42 +11,39 @@ class IosInstallCoachTest < ActionDispatch::IntegrationTest
   DESKTOP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " \
                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15"
 
-  test "renders the install banner for iPhone Safari" do
+  WINDOWS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " \
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+  test "the install banner renders only for Apple mobile Safari, hidden (for JS to reveal) on a Macintosh UA" do
+    {
+      # A Macintosh UA can be an iPadOS 13+ Safari masquerading as a Mac, so
+      # the server ships the (hidden) banner and lib/ios_device.js decides
+      # client-side via maxTouchPoints — a real Mac desktop never gets it
+      # revealed.
+      "iPhone Safari"      => [ IPHONE_UA, :visible ],
+      "iPad Safari"        => [ IPAD_UA, :visible ],
+      "Android Chrome"     => [ ANDROID_UA, :absent ],
+      "Macintosh (ships hidden, JS decides via maxTouchPoints)" => [ DESKTOP_UA, :hidden ],
+      "Windows desktop"    => [ WINDOWS_UA, :absent ],
+      "no user agent sent" => [ nil, :absent ]
+    }.each do |label, (ua, expectation)|
+      headers = ua ? { "HTTP_USER_AGENT" => ua } : {}
+      get new_session_path, headers: headers
+      assert_response :success, label
+
+      case expectation
+      when :visible
+        assert css_select("#ios-install-coach").any?, "#{label}: expected the banner to render"
+      when :hidden
+        assert css_select("#ios-install-coach[hidden]").any?, "#{label}: expected the banner to ship hidden"
+      when :absent
+        assert css_select("#ios-install-coach").empty?, "#{label}: expected no banner"
+      end
+    end
+
     get new_session_path, headers: { "HTTP_USER_AGENT" => IPHONE_UA }
-    assert_response :success
-    assert_select "#ios-install-coach"
     assert_match "Install this app to your home screen", response.body
     assert_match "Add to Home Screen", response.body
-  end
-
-  test "renders the install banner for iPad Safari" do
-    get new_session_path, headers: { "HTTP_USER_AGENT" => IPAD_UA }
-    assert_select "#ios-install-coach"
-  end
-
-  test "hides the install banner for Android Chrome" do
-    get new_session_path, headers: { "HTTP_USER_AGENT" => ANDROID_UA }
-    assert_select "#ios-install-coach", count: 0
-  end
-
-  # A Macintosh UA can be an iPadOS 13+ Safari masquerading as a Mac, so the
-  # server ships the (hidden) banner and lib/ios_device.js decides client-side
-  # via maxTouchPoints — a real Mac desktop never gets it revealed.
-  test "ships the banner hidden for Macintosh UAs so JS can catch masquerading iPads" do
-    get new_session_path, headers: { "HTTP_USER_AGENT" => DESKTOP_UA }
-    assert_select "#ios-install-coach[hidden]"
-  end
-
-  test "hides the install banner for non-Apple desktop browsers" do
-    windows_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " \
-                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    get new_session_path, headers: { "HTTP_USER_AGENT" => windows_ua }
-    assert_select "#ios-install-coach", count: 0
-  end
-
-  test "hides the install banner when no user agent is sent" do
-    get new_session_path
-    assert_select "#ios-install-coach", count: 0
   end
 
   # The reveal must not depend on the Stimulus/importmap module graph booting:

@@ -33,7 +33,6 @@ class BingoCardTest < ApplicationSystemTestCase
 
   private
 
-  # Mirrors the helper used by test/system/biggest_vs_smallest_tournament_test.rb.
   def sign_in_as(user)
     visit new_session_path
     fill_in "Email", with: user.email

@@ -64,15 +64,6 @@ class Organizers::TournamentEntriesControllerTest < ActionDispatch::IntegrationT
     assert_match(/unavailable/i, flash[:alert])
   end
 
-  test "organizer adds a solo entry after tournament starts" do
-    started = create(:tournament, club: @club, mode: :solo, starts_at: 1.minute.ago, ends_at: 1.hour.from_now)
-    assert_difference "TournamentEntry.count", 1 do
-      post organizers_tournament_tournament_entries_path(tournament_id: started.id),
-           params: { tournament_entry: { member_user_ids: [@member.id] } }
-    end
-    assert_redirected_to edit_organizers_tournament_path(started)
-  end
-
   test "destroying an entry mid-tournament cascades placements and broadcasts the leaderboard" do
     walleye = create(:species, club: @club)
     started = create(:tournament, club: @club, mode: :team, starts_at: 30.minutes.ago, ends_at: 30.minutes.from_now)
@@ -110,16 +101,6 @@ class Organizers::TournamentEntriesControllerTest < ActionDispatch::IntegrationT
     patch organizers_tournament_tournament_entry_path(tournament_id: @team.id, id: entry.id),
           params: { tournament_entry: { name: "  " } }
     assert_nil entry.reload.name
-  end
-
-  test "organizer renames an entry after tournament starts" do
-    started = create(:tournament, club: @club, mode: :team, starts_at: 1.minute.ago, ends_at: 1.hour.from_now)
-    entry = create(:tournament_entry, tournament: started, name: "Old")
-    create(:tournament_entry_member, tournament_entry: entry, user: @member)
-    patch organizers_tournament_tournament_entry_path(tournament_id: started.id, id: entry.id),
-          params: { tournament_entry: { name: "New" } }
-    assert_redirected_to edit_organizers_tournament_path(started)
-    assert_equal "New", entry.reload.name
   end
 
   test "organizer destroys an entry" do

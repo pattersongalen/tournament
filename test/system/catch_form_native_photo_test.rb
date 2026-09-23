@@ -7,19 +7,21 @@ class CatchFormNativePhotoTest < ApplicationSystemTestCase
     create(:species, club: @club, name: "Walleye")
   end
 
-  test "choosing a photo via the native file input shows the preview and clears the take-photo prompt" do
+  # Merges attach->preview, dismiss-retake->kept, and accept-retake->cleared
+  # into one continuous flow on the same form.
+  test "attaching a photo shows the preview; Retake asks before clearing it" do
     visit_catch_form_with_photo
 
     # Preview becomes visible, Retake appears, and the form's missing-field
     # status no longer asks for a photo.
-    assert_selector "img[data-photo-capture-target='preview']", visible: true
-    assert_selector "button[data-photo-capture-target='retakeButton']", visible: true
-    assert_no_text "Take a photo first."
-  end
-
-  test "dismissing the retake confirmation keeps the existing photo" do
-    visit_catch_form_with_photo
-    assert_selector "button[data-photo-capture-target='retakeButton']", visible: true
+    assert page.has_selector?("img[data-photo-capture-target='preview']", visible: true, wait: 5),
+           "attach: the preview image should render"
+    assert page.has_selector?("button[data-photo-capture-target='retakeButton']", visible: true, wait: 5),
+           "attach: the Retake button should appear"
+    assert page.has_no_text?("Take a photo first.", wait: 5),
+           "attach: the missing-photo prompt should clear"
+    assert_match(/sample_walleye\.jpg\z/, photo_input_value,
+                 "attach: the file input should hold the chosen file")
 
     dismiss_confirm do
       click_button "Retake"
@@ -27,14 +29,12 @@ class CatchFormNativePhotoTest < ApplicationSystemTestCase
 
     # retake() returned before clearing the input, so the chosen file is still
     # attached and the preview still renders.
-    assert_selector "img[data-photo-capture-target='preview']", visible: true
-    assert_no_text "Take a photo first."
-    assert_match(/sample_walleye\.jpg\z/, photo_input_value)
-  end
-
-  test "accepting the retake confirmation clears the attached photo" do
-    visit_catch_form_with_photo
-    assert_match(/sample_walleye\.jpg\z/, photo_input_value)
+    assert page.has_selector?("img[data-photo-capture-target='preview']", visible: true, wait: 5),
+           "dismiss retake: the preview should still render"
+    assert page.has_no_text?("Take a photo first.", wait: 5),
+           "dismiss retake: the missing-photo prompt should stay cleared"
+    assert_match(/sample_walleye\.jpg\z/, photo_input_value,
+                 "dismiss retake: the file should stay attached")
 
     accept_confirm do
       click_button "Retake"
@@ -42,7 +42,7 @@ class CatchFormNativePhotoTest < ApplicationSystemTestCase
 
     # retake() ran past the guard and cleared the input so a re-pick of the same
     # file still fires a change event. The OS camera itself can't open headless.
-    assert_equal "", photo_input_value
+    assert_equal "", photo_input_value, "accept retake: the file input should clear"
   end
 
   private

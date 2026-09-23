@@ -8,40 +8,22 @@ class CatchesHelperTest < ActionView::TestCase
     next_range(day, current_start, current_end)
   end
 
-  test "no current selection — tap selects single day" do
-    assert_equal [Date.new(2026, 5, 5), Date.new(2026, 5, 5)],
-                 call(Date.new(2026, 5, 5), nil, nil)
-  end
+  test "next_range follows the tap-selection rule table" do
+    d5  = Date.new(2026, 5, 5)
+    d8  = Date.new(2026, 5, 8)
+    d12 = Date.new(2026, 5, 12)
+    d20 = Date.new(2026, 5, 20)
 
-  test "single day, tap same day — no change" do
-    s = Date.new(2026, 5, 5)
-    assert_equal [s, s], call(s, s, s)
-  end
-
-  test "single day, tap a later day — extends to range" do
-    s = Date.new(2026, 5, 5)
-    d = Date.new(2026, 5, 12)
-    assert_equal [s, d], call(d, s, s)
-  end
-
-  test "single day, tap an earlier day — extends backward" do
-    s = Date.new(2026, 5, 12)
-    d = Date.new(2026, 5, 5)
-    assert_equal [d, s], call(d, s, s)
-  end
-
-  test "existing range, tap any day — resets to single day on tapped" do
-    s = Date.new(2026, 5, 5)
-    e = Date.new(2026, 5, 12)
-    d = Date.new(2026, 5, 20)
-    assert_equal [d, d], call(d, s, e)
-  end
-
-  test "existing range, tap inside the range — also resets to single day" do
-    s = Date.new(2026, 5, 5)
-    e = Date.new(2026, 5, 12)
-    d = Date.new(2026, 5, 8)
-    assert_equal [d, d], call(d, s, e)
+    {
+      "no current selection: tap selects single day"          => [[d5, nil, nil], [d5, d5]],
+      "single day, tap same day: no change"                   => [[d5, d5, d5], [d5, d5]],
+      "single day, tap a later day: extends forward"          => [[d12, d5, d5], [d5, d12]],
+      "single day, tap an earlier day: extends backward"      => [[d5, d12, d12], [d5, d12]],
+      "existing range, tap any day: resets to single day"     => [[d20, d5, d12], [d20, d20]],
+      "existing range, tap inside: also resets to single day" => [[d8, d5, d12], [d8, d8]]
+    }.each do |label, (args, expected)|
+      assert_equal expected, call(*args), label
+    end
   end
 
   test "maps_url_for builds a Google Maps query URL from full-precision coords" do
@@ -49,61 +31,57 @@ class CatchesHelperTest < ActionView::TestCase
     assert_equal "https://maps.google.com/?q=49.123456,-103.987654", maps_url_for(c)
   end
 
-  test "month_calendar_link_url — no current selection, returns URL with start=end=tapped" do
-    url = month_calendar_link_url(Date.new(2026, 5, 5),
-                                  current_start: nil, current_end: nil,
-                                  params: {}, path_helper: :catches_path)
-    assert_match %r{\?.*start=2026-05-05}, url
-    assert_match %r{\?.*end=2026-05-05}, url
+  test "month_calendar_link_url encodes start/end for single-day and range selections" do
+    s = Date.new(2026, 5, 5)
+    d = Date.new(2026, 5, 12)
+    {
+      "no current selection: start=end=tapped" =>
+        { d: s, current_start: nil, current_end: nil, start: "2026-05-05", end: "2026-05-05" },
+      "single day + later tap: encodes range" =>
+        { d: d, current_start: s, current_end: s, start: "2026-05-05", end: "2026-05-12" }
+    }.each do |label, c|
+      url = month_calendar_link_url(c[:d], current_start: c[:current_start], current_end: c[:current_end],
+                                     params: {}, path_helper: :catches_path)
+      if c[:current_start].nil?
+        assert_match %r{\?.*start=#{c[:start]}}, url, label
+        assert_match %r{\?.*end=#{c[:end]}}, url, label
+      else
+        assert_match "start=#{c[:start]}", url, label
+        assert_match "end=#{c[:end]}", url, label
+      end
+    end
   end
 
-  test "month_calendar_link_url — preserves species and sort params" do
+  test "month_calendar_link_url preserves query params but drops controller/action keys" do
     url = month_calendar_link_url(Date.new(2026, 5, 5),
                                   current_start: nil, current_end: nil,
-                                  params: { species: "3", sort: "longest" },
+                                  params: { species: "3", sort: "longest", controller: "catches", action: "index" },
                                   path_helper: :catches_path)
     assert_match "species=3", url
     assert_match "sort=longest", url
     assert_match "start=2026-05-05", url
-  end
-
-  test "month_calendar_link_url — single day + later tap encodes range" do
-    s = Date.new(2026, 5, 5)
-    d = Date.new(2026, 5, 12)
-    url = month_calendar_link_url(d,
-                                  current_start: s, current_end: s,
-                                  params: {}, path_helper: :catches_path)
-    assert_match "start=2026-05-05", url
-    assert_match "end=2026-05-12", url
-  end
-
-  test "month_calendar_link_url — drops controller/action keys from params" do
-    url = month_calendar_link_url(Date.new(2026, 5, 5),
-                                  current_start: nil, current_end: nil,
-                                  params: { controller: "catches", action: "index" },
-                                  path_helper: :catches_path)
     refute_match "controller=", url
     refute_match "action=", url
   end
 
-  test "flag_label renders out_of_province as 'outside Saskatchewan'" do
-    assert_equal "outside Saskatchewan", flag_label("out_of_province")
+  test "flag_label renders known flags with friendly text" do
+    {
+      "out_of_province"    => "outside Saskatchewan",
+      "screenshot_suspect" => "possible screenshot"
+    }.each do |flag, label_text|
+      assert_equal label_text, flag_label(flag), flag
+    end
   end
 
-  test "flag_label renders screenshot_suspect as 'possible screenshot'" do
-    assert_equal "possible screenshot", flag_label("screenshot_suspect")
-  end
-
-  test "visible_flags_for hides screenshot_suspect from a non-reviewing member" do
+  test "visible_flags_for hides screenshot_suspect unless the viewer can review catches" do
     catch_record = Catch.new(flags: %w[missing_gps screenshot_suspect])
-    define_singleton_method(:can_review_catch?) { |_| false }
-    assert_equal %w[missing_gps], visible_flags_for(catch_record)
-  end
-
-  test "visible_flags_for shows screenshot_suspect to staff" do
-    catch_record = Catch.new(flags: %w[missing_gps screenshot_suspect])
-    define_singleton_method(:can_review_catch?) { |_| true }
-    assert_equal %w[missing_gps screenshot_suspect], visible_flags_for(catch_record)
+    {
+      false => %w[missing_gps],
+      true  => %w[missing_gps screenshot_suspect]
+    }.each do |can_review, expected|
+      define_singleton_method(:can_review_catch?) { |_| can_review }
+      assert_equal expected, visible_flags_for(catch_record), "can_review_catch?=#{can_review}"
+    end
   end
 
   # --- JPEG-variant photo display helpers (iOS HEIC support) ---
@@ -123,49 +101,37 @@ class CatchesHelperTest < ActionView::TestCase
   # internals) so they fail if a helper is changed to serve the raw original.
   # A variant routes through /representations/; a raw original through /blobs/.
 
-  test "thumb renders a lazy <img> pointing at a processed variant, not the raw original" do
-    html = thumb(attached_photo)
-    assert_match %r{<img }, html
-    assert_match %r{loading="lazy"}, html
-    assert_includes html, "/rails/active_storage/representations/"
-    refute_includes html, "/rails/active_storage/blobs/"
+  test "thumb, photo_full, and photo_src_url all route through a processed variant, not the raw original" do
+    photo = attached_photo
+    {
+      "thumb"         => thumb(photo),
+      "photo_full"    => photo_full(photo),
+      "photo_src_url" => photo_src_url(photo)
+    }.each do |label, output|
+      assert_includes output, "/rails/active_storage/representations/", label
+      refute_includes output, "/rails/active_storage/blobs/", label
+    end
+    assert_match %r{<img }, thumb(photo)
+    assert_match %r{loading="lazy"}, thumb(photo)
+    assert_match %r{<img }, photo_full(photo)
   end
 
-  test "photo_full renders a full-bleed <img> at a processed variant" do
-    html = photo_full(attached_photo)
-    assert_match %r{<img }, html
-    assert_includes html, "/rails/active_storage/representations/"
-    refute_includes html, "/rails/active_storage/blobs/"
-  end
-
-  test "photo_src_url returns a representation URL, not a raw blob URL" do
-    url = photo_src_url(attached_photo)
-    assert_includes url, "/rails/active_storage/representations/"
-    refute_includes url, "/rails/active_storage/blobs/"
-  end
-
-  test "photo_download_url serves a JPEG original through a stripped variant, never the raw blob" do
+  test "photo_download_url serves a stripped, full-resolution JPEG variant for any original" do
     # The raw original ships full-precision GPS EXIF — an Android native-camera
     # JPEG saved by a rival is the honey-hole leak the strip exists to close.
-    url = photo_download_url(attached_photo)
-    assert_includes url, "/rails/active_storage/representations/"
-    refute_includes url, "/rails/active_storage/blobs/"
-  end
+    jpeg_url = photo_download_url(attached_photo)
+    assert_includes jpeg_url, "/rails/active_storage/representations/"
+    refute_includes jpeg_url, "/rails/active_storage/blobs/"
 
-  test "photo_download_url transcodes a non-JPEG original to a full-resolution JPEG" do
-    photo = attached_photo(path: "test/fixtures/files/sample_walleye.heic",
+    heic = attached_photo(path: "test/fixtures/files/sample_walleye.heic",
                            content_type: "image/heic", filename: "sample_walleye.heic")
-    url = photo_download_url(photo)
-    # Non-JPEG goes through a variant (representation), not the raw original.
-    assert_includes url, "/rails/active_storage/representations/"
-  end
+    # Non-JPEG goes through a variant (representation) too, not the raw original.
+    assert_includes photo_download_url(heic), "/rails/active_storage/representations/"
 
-  test "photo_download_url serves full resolution at high quality with the strip" do
     # Downloads are the largest quality we can serve (user decision
     # 2026-08-08): no resize limit — the unbounded first-tap transcode is an
     # accepted cost — and a high encode Q, but ALWAYS the metadata strip.
-    url = photo_download_url(attached_photo)
-    variation_key = url[%r{/representations/(?:redirect|proxy)/[^/]+/([^/]+)}, 1]
+    variation_key = jpeg_url[%r{/representations/(?:redirect|proxy)/[^/]+/([^/]+)}, 1]
     transformations = ActiveStorage::Variation.decode(variation_key).transformations
     assert_nil transformations[:resize_to_limit]
     assert_equal true, transformations[:saver][:strip]
@@ -173,27 +139,31 @@ class CatchesHelperTest < ActionView::TestCase
     assert_equal "jpeg", transformations[:format].to_s
   end
 
-  test "the JPEG variant transcodes a HEIC original (the iOS path)" do
-    photo = attached_photo(path: "test/fixtures/files/sample_walleye.heic",
-                           content_type: "image/heic", filename: "sample_walleye.heic")
-    processed = photo.variant(resize_to_limit: [400, 400], format: :jpeg).processed
-    assert_equal "image/jpeg", processed.image.blob.content_type
-  end
-
   # --- EXIF (GPS) stripping from served variants (privacy: defeats saved-photo GPS leak) ---
 
-  test "stripped_jpeg_variant strips metadata from served variants" do
+  test "stripped_jpeg_variant converts to sRGB before the strip discards the profile" do
     # Minitest::Mock isn't available in this environment (minitest 6.0.6 split
     # Mock/Stub into a separate gem that isn't a dependency here), so this
     # matches the file's existing define_singleton_method stubbing style
-    # (see visible_flags_for tests above) rather than the brief's Mock example.
+    # rather than the brief's Mock example.
     captured = nil
     attachment = Object.new
     attachment.define_singleton_method(:variant) { |**opts| captured = opts; :a_variant }
     stripped_jpeg_variant(attachment, size: [400, 400])
+
+    assert_equal :srgb, captured[:colourspace],
+                 "1-band sources must be widened to 3 bands or icc_transform hard-fails"
+    assert_equal "srgb", captured[:icc_transform]
     assert_equal({ strip: true }, captured[:saver])
     assert_equal :jpeg, captured[:format]
     assert_equal [400, 400], captured[:resize_to_limit]
+    # Order matters: Active Storage applies the transformations in hash order, so
+    # the conversion has to land before the saver strips the profile it reads.
+    keys = captured.keys.map(&:to_s)
+    assert keys.index("icc_transform") < keys.index("saver"),
+           "icc_transform must be applied before the saver strip: #{keys.inspect}"
+    assert keys.index("colourspace") < keys.index("icc_transform"),
+           "colourspace must widen the image before icc_transform: #{keys.inspect}"
   end
 
   test "vips variant pipeline with strip removes EXIF GPS end-to-end" do
@@ -225,25 +195,6 @@ class CatchesHelperTest < ActionView::TestCase
     /usr/share/color/icc/ghostscript/a98.icc
     /usr/share/color/icc/ghostscript/rommrgb.icc
   ].freeze
-
-  test "stripped_jpeg_variant converts to sRGB before the strip discards the profile" do
-    captured = nil
-    attachment = Object.new
-    attachment.define_singleton_method(:variant) { |**opts| captured = opts; :a_variant }
-    stripped_jpeg_variant(attachment, size: [400, 400])
-
-    assert_equal :srgb, captured[:colourspace],
-                 "1-band sources must be widened to 3 bands or icc_transform hard-fails"
-    assert_equal "srgb", captured[:icc_transform]
-    assert_equal({ strip: true }, captured[:saver])
-    # Order matters: Active Storage applies the transformations in hash order, so
-    # the conversion has to land before the saver strips the profile it reads.
-    keys = captured.keys.map(&:to_s)
-    assert keys.index("icc_transform") < keys.index("saver"),
-           "icc_transform must be applied before the saver strip: #{keys.inspect}"
-    assert keys.index("colourspace") < keys.index("icc_transform"),
-           "colourspace must widen the image before icc_transform: #{keys.inspect}"
-  end
 
   test "the served variant pipeline bakes a wide-gamut profile into sRGB pixels" do
     require "image_processing/vips"

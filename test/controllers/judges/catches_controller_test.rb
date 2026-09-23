@@ -52,42 +52,38 @@ class Judges::CatchesControllerTest < ActionDispatch::IntegrationTest
                     "expected judge_actions to be eager-loaded in one query, got #{judge_action_queries}"
   end
 
-  test "non-judge sees forbidden" do
-    other = create(:user, club: @club)
-    sign_in_as(other)
-    get judges_tournament_catches_path(tournament_id: @t.id)
-    assert_response :forbidden
-  end
+  # Merges: "non-judge sees forbidden", "organizer can review catches in
+  # friendly tournament", "organizer cannot review catches in judged
+  # tournament unless they are a judge", "organizer from another club cannot
+  # review catches", "site admin (not assigned judge) can view the judge
+  # catch page". Row 3 flips @t to judged: true — it runs after the
+  # friendly-tournament row, and no later row depends on @t being friendly;
+  # the site-admin row (5) runs against the now-judged @t, which is fine
+  # since require_reviewer! admits site admins regardless of judged/friendly.
+  test "access to the judge review pages by role" do
+    rows = [
+      ["non-judge member",
+       -> { sign_in_as(create(:user, club: @club)) },
+       -> { judges_tournament_catches_path(tournament_id: @t.id) }, :forbidden],
+      ["organizer, friendly tournament",
+       -> { sign_in_as(create(:user, club: @club, role: :organizer)) },
+       -> { judges_tournament_catches_path(tournament_id: @t.id) }, :success],
+      ["organizer, judged tournament (not a judge)",
+       -> { @t.update!(judged: true); sign_in_as(create(:user, club: @club, role: :organizer)) },
+       -> { judges_tournament_catches_path(tournament_id: @t.id) }, :forbidden],
+      ["organizer from another club",
+       -> { sign_in_as(create(:user, club: create(:club), role: :organizer)) },
+       -> { judges_tournament_catches_path(tournament_id: @t.id) }, :not_found],
+      ["site admin (not assigned judge)",
+       -> { sign_in_as(create(:user, club: @club, admin: true)) },
+       -> { judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id) }, :success]
+    ]
 
-  test "organizer can review catches in friendly tournament" do
-    organizer = create(:user, club: @club, role: :organizer)
-    sign_in_as(organizer)
-    get judges_tournament_catches_path(tournament_id: @t.id)
-    assert_response :success
-  end
-
-  test "organizer cannot review catches in judged tournament unless they are a judge" do
-    @t.update!(judged: true)
-    organizer = create(:user, club: @club, role: :organizer)
-    sign_in_as(organizer)
-    get judges_tournament_catches_path(tournament_id: @t.id)
-    assert_response :forbidden
-  end
-
-  test "organizer from another club cannot review catches" do
-    other_club = create(:club)
-    foreign_organizer = create(:user, club: other_club, role: :organizer)
-    sign_in_as(foreign_organizer)
-    get judges_tournament_catches_path(tournament_id: @t.id)
-    assert_response :not_found
-  end
-
-  test "show renders the release video with playsinline for iPhone reviewers" do
-    @needs_review.video.attach(io: StringIO.new("fake-mp4-bytes"), filename: "video.mp4", content_type: "video/mp4")
-
-    get judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
-    assert_response :success
-    assert_select "video[playsinline][preload=metadata]"
+    rows.each do |label, setup, path, expected|
+      setup.call
+      get path.call
+      assert_response expected, label
+    end
   end
 
   test "show renders styled action buttons (color-coded by action)" do
@@ -99,14 +95,14 @@ class Judges::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_select "button[value=dock_verify][class*='bg-']"
   end
 
-  test "GET show on a catch from another tournament is not found" do
+  # Merges: "GET show on a catch from another tournament is not found" and
+  # "index does not list catches from other tournaments".
+  test "catches from another tournament are unreachable: 404 on show, excluded from index" do
     foreign_catch = create_foreign_synced_catch
+
     get judges_tournament_catch_path(tournament_id: @t.id, id: foreign_catch.id)
     assert_response :not_found
-  end
 
-  test "index does not list catches from other tournaments" do
-    foreign_catch = create_foreign_synced_catch
     get judges_tournament_catches_path(tournament_id: @t.id)
     assert_response :success
     assert_not_includes response.body, "<td>#{foreign_catch.id}</td>"
@@ -132,7 +128,9 @@ class Judges::CatchesControllerTest < ActionDispatch::IntegrationTest
     refute_match(/Original submission/i, response.body)
   end
 
-  test "judge page reference-photo form posts to the shared catch route (admin)" do
+  # Merges: "judge page reference-photo form posts to the shared catch route
+  # (admin)" and "non-admin judge does not see the reference-photo form".
+  test "reference-photo form: shown to a site-admin judge, hidden from a non-admin judge" do
     admin = create(:user, club: @club, admin: true)
     create(:tournament_judge, tournament: @t, user: admin)
     sign_in_as(admin)
@@ -144,10 +142,8 @@ class Judges::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_select "form[action=?]", reference_photo_catch_path(@needs_review) do
       assert_select "input[name=_method][value=patch]", 1
     end
-  end
 
-  test "non-admin judge does not see the reference-photo form" do
-    # @judge (signed in by setup) is a judge but not a site admin.
+    sign_in_as(@judge) # a judge, but not a site admin
     get judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
     assert_response :success
     assert_select "form[action=?]", reference_photo_catch_path(@needs_review), count: 0
@@ -167,47 +163,61 @@ class Judges::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_equal 1, oop.reload.catch_placements.active.count
   end
 
-  test "plain member is forbidden from geofence_override" do
+  # Merges: "plain member is forbidden from geofence_override" and "non-admin
+  # judge is forbidden from correct_location".
+  test "geofence_override forbidden for a plain member; correct_location forbidden for a non-admin judge" do
     member = create(:user, club: @club)
     sign_in_as(member)
     patch geofence_override_judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id),
           params: { override_in_sask: "1" }
     assert_response :forbidden
-  end
 
-  test "non-admin judge is forbidden from correct_location" do
+    sign_in_as(@judge) # a judge, but not a site admin
     patch correct_location_judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id),
           params: { latitude: "53.55", longitude: "-103.65" }
     assert_response :forbidden
   end
 
-  test "site admin can correct_location even when not an assigned judge" do
+  # Merges: "site admin can correct_location even when not an assigned judge"
+  # and "GPS editor section is rendered for site admins only".
+  test "admin: can correct_location though not an assigned judge, and only admins see the GPS editor" do
+    # Non-admin judge: no editor.
+    get judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
+    assert_select "[data-controller='location-edit']", count: 0
+
     admin = create(:user, club: @club, admin: true)
-    sign_in_as(admin)
+    sign_in_as(admin) # not an assigned judge
     patch correct_location_judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id),
           params: { latitude: "53.55", longitude: "-103.65" }
     assert_redirected_to judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
     assert_in_delta 53.55, @needs_review.reload.latitude.to_f, 0.001
+
+    get judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
+    assert_select "[data-controller='location-edit']"
+    assert_select "input[type=submit][value=?]", "Save corrected location"
   end
 
-  test "judge can reinstate a disqualified catch" do
-    Catches::ApplyJudgeAction.call(tournament: @t, catch: @needs_review, judge: @judge, action: :disqualify, note: "dq")
-    patch reinstate_judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
-    assert_redirected_to judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
-    assert_not @needs_review.reload.disqualified?
-  end
+  # Merges: "judge can reinstate a disqualified catch", "reinstate on a
+  # non-disqualified catch redirects with an alert", "show renders a
+  # reinstate button only for disqualified catches".
+  test "reinstate: works on a disqualified catch, alerts on a non-disqualified one, button shows only when disqualified" do
+    # Button hidden before DQ.
+    get judges_tournament_catch_path(tournament_id: @t.id, id: @synced.id)
+    assert_select "input[type=submit][value=?]", "Reinstate catch", count: 0
 
-  test "reinstate on a non-disqualified catch redirects with an alert" do
+    # Reinstating a non-disqualified catch is a no-op with an alert.
     patch reinstate_judges_tournament_catch_path(tournament_id: @t.id, id: @synced.id)
     assert_redirected_to judges_tournament_catch_path(tournament_id: @t.id, id: @synced.id)
     assert_match(/disqualified/i, flash[:alert])
-  end
 
-  test "site admin (not assigned judge) can view the judge catch page" do
-    admin = create(:user, club: @club, admin: true)
-    sign_in_as(admin)
-    get judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
-    assert_response :success
+    # DQ it, then the button shows and a reinstate actually clears it.
+    Catches::ApplyJudgeAction.call(tournament: @t, catch: @synced, judge: @judge, action: :disqualify, note: "dq")
+    get judges_tournament_catch_path(tournament_id: @t.id, id: @synced.id)
+    assert_select "input[type=submit][value=?]", "Reinstate catch"
+
+    patch reinstate_judges_tournament_catch_path(tournament_id: @t.id, id: @synced.id)
+    assert_redirected_to judges_tournament_catch_path(tournament_id: @t.id, id: @synced.id)
+    assert_not @synced.reload.disqualified?
   end
 
   # --- Task 7: geofence-override + reinstate UI -------------------------------
@@ -220,60 +230,32 @@ class Judges::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_select "input[type=checkbox][name=override_in_sask][checked=checked]"
   end
 
-  test "show renders a reinstate button only for disqualified catches" do
-    get judges_tournament_catch_path(tournament_id: @t.id, id: @synced.id)
-    assert_select "input[type=submit][value=?]", "Reinstate catch", count: 0
-
-    Catches::ApplyJudgeAction.call(tournament: @t, catch: @synced, judge: @judge, action: :disqualify, note: "dq")
-    get judges_tournament_catch_path(tournament_id: @t.id, id: @synced.id)
-    assert_select "input[type=submit][value=?]", "Reinstate catch"
-  end
-
   # --- Task 8: admin GPS map editor ------------------------------------------
+  # (GPS editor coverage merged above into the "admin: can correct_location…"
+  # test.)
 
-  test "GPS editor section is rendered for site admins only" do
-    # Non-admin judge: no editor.
-    get judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
-    assert_select "[data-controller='location-edit']", count: 0
-
-    admin = create(:user, club: @club, admin: true)
-    create(:tournament_judge, tournament: @t, user: admin)
-    sign_in_as(admin)
-    get judges_tournament_catch_path(tournament_id: @t.id, id: @needs_review.id)
-    assert_select "[data-controller='location-edit']"
-    assert_select "input[type=submit][value=?]", "Save corrected location"
-  end
-
-  # Bingo keeps no CatchPlacement rows, so a clean (unflagged) entrant catch is
-  # neither placed nor in the needs_review queue — before the entrant/window
-  # branch it was invisible to the judge.
-  test "index reaches an entrant's clean catch on a bingo tournament (no placements)" do
+  # Merges: "index reaches an entrant's clean catch on a bingo tournament (no
+  # placements)", "show reaches an entrant's clean catch on a bingo
+  # tournament (no placements)", "index shows review-only flags to a
+  # dedicated judge on a bingo tournament". Bingo keeps no CatchPlacement
+  # rows, so a clean (unflagged) entrant catch is neither placed nor in the
+  # needs_review queue, and the placement-based can_review_catch? check can't
+  # connect a dedicated (non-organizer) judge to it — the entrant/window
+  # fallback must surface it (and its review-only flags) on both index and show.
+  test "bingo tournament: judge reaches an entrant's clean catch (no placements) via index and show, including review-only flags" do
     bingo, judge, clean = bingo_tournament_with_clean_catch
+    clean.update!(flags: %w[screenshot_suspect])
     sign_in_as(judge)
+
     get judges_tournament_catches_path(tournament_id: bingo.id)
     assert_response :success
     assert_includes response.body, "<td>#{clean.id}</td>",
                      "a bingo entrant's clean catch should appear in the judge queue"
-  end
-
-  test "show reaches an entrant's clean catch on a bingo tournament (no placements)" do
-    bingo, judge, clean = bingo_tournament_with_clean_catch
-    sign_in_as(judge)
-    get judges_tournament_catch_path(tournament_id: bingo.id, id: clean.id)
-    assert_response :success
-  end
-
-  test "index shows review-only flags to a dedicated judge on a bingo tournament" do
-    # Bingo keeps no CatchPlacement rows, so the placement-based can_review_catch?
-    # check can't connect a dedicated (non-organizer) judge to the catch. The
-    # entrant/window fallback must still surface the review-only flag.
-    bingo, judge, clean = bingo_tournament_with_clean_catch
-    clean.update!(flags: %w[screenshot_suspect])
-    sign_in_as(judge)
-    get judges_tournament_catches_path(tournament_id: bingo.id)
-    assert_response :success
     assert_includes response.body, "possible screenshot",
                      "a dedicated judge must see the review-only flag on a bingo entrant's catch"
+
+    get judges_tournament_catch_path(tournament_id: bingo.id, id: clean.id)
+    assert_response :success
   end
 
   private

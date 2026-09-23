@@ -52,11 +52,10 @@ module IosWebQuirks
   #   deny_geolocation:   getCurrentPosition immediately errors "denied"
   #                       (headless Chrome otherwise fires neither callback)
   #   remove_sync_manager: no Background Sync API, like iOS Safari
-  #   deny_camera:        getUserMedia rejects with NotAllowedError
   #   sync_retry_ms:      overrides offline/sync.js's retry tick period
   #   extra_js:           appended verbatim for test-specific shims
   def apply_ios_shims(online: nil, deny_geolocation: false, remove_sync_manager: false,
-                      deny_camera: false, sync_retry_ms: nil, extra_js: nil)
+                      sync_retry_ms: nil, extra_js: nil)
     parts = []
     case online
     when :except_offline_shell
@@ -79,16 +78,6 @@ module IosWebQuirks
       JS
     end
     parts << "try { delete window.SyncManager; } catch (e) {}" if remove_sync_manager
-    if deny_camera
-      parts << <<~JS
-        Object.defineProperty(navigator, "mediaDevices", {
-          configurable: true,
-          value: {
-            getUserMedia: () => Promise.reject(new DOMException("Permission denied", "NotAllowedError"))
-          }
-        });
-      JS
-    end
     parts << "window.__syncRetryMs = #{Integer(sync_retry_ms)};" if sync_retry_ms
     parts << extra_js if extra_js
 
@@ -110,7 +99,7 @@ module IosWebQuirks
   # v2 writes bytes to the `blobs` store instead and falls back to inline for
   # rows queued before the upgrade, so these seeds keep that fallback covered.
   # The v2 shape is exercised end-to-end by the tests that actually log a catch
-  # through enqueueCatch (offline_catch_form_test, log_catch_test).
+  # through enqueueCatch (offline_catch_form_test).
   def seed_idb_catch(uuid:, species_id:, trigger_js:, length_inches: "18",
                      status: "pending", photo_js: SYNTHETIC_JPEG_JS,
                      queued_by_user_id: nil, queued_ago_ms: 0, extra_fields: {})

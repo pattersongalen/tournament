@@ -8,7 +8,7 @@ class JudgeActionTest < ActiveSupport::TestCase
                     species: create(:species, club: @club))
   end
 
-  test "records action, note, before/after" do
+  test "records action, note, before/after and covers the full action enum" do
     a = JudgeAction.create!(
       judge_user: @judge, catch: @catch, action: :approve,
       note: "looks good", before_state: { status: "needs_review" },
@@ -17,21 +17,13 @@ class JudgeActionTest < ActiveSupport::TestCase
     assert a.persisted?
     assert_equal "approve", a.action
     assert_equal "looks good", a.note
-  end
 
-  test "action enum covers approve, flag, disqualify, manual_override, dock_verify" do
-    JudgeAction.actions.keys.tap do |keys|
-      %w[approve flag disqualify manual_override dock_verify].each do |k|
-        assert_includes keys, k
-      end
-    end
-  end
-
-  test "new correction actions are valid enum values" do
-    %i[geofence_override correct_location reinstate].each do |a|
-      action = build(:judge_action, action: a)
-      assert action.valid?, "#{a} should be a valid action"
-      assert_equal a.to_s, action.action
+    %w[approve flag disqualify manual_override dock_verify
+       geofence_override correct_location reinstate].each do |action|
+      assert_includes JudgeAction.actions.keys, action, "#{action}: should be a defined enum key"
+      record = build(:judge_action, action: action)
+      assert record.valid?, "#{action}: should be a valid action"
+      assert_equal action, record.action, "#{action}: round-trips through the enum"
     end
   end
 end

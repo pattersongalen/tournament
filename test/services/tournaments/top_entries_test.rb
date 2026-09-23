@@ -1,7 +1,7 @@
 require "test_helper"
 
 module Tournaments
-  class TopThreeTest < ActiveSupport::TestCase
+  class TopEntriesTest < ActiveSupport::TestCase
     setup do
       @club = create(:club)
       @walleye = create(:species, club: @club)
@@ -19,14 +19,24 @@ module Tournaments
       entry
     end
 
-    test "returns top 3 by total length" do
+    test "returns the top N by total length" do
       add_angler("A", [10])
       add_angler("B", [20])
       add_angler("C", [15])
       add_angler("D", [5])
 
-      result = TopThree.call(tournament: @tournament)
+      result = TopEntries.call(tournament: @tournament, limit: 3)
       assert_equal ["B", "C", "A"], result.map { |r| r[:entry].users.first.name }
+    end
+
+    test "a larger limit returns the whole qualified field in rank order" do
+      add_angler("A", [10])
+      add_angler("B", [20])
+      add_angler("C", [15])
+      add_angler("D", [5])
+
+      result = TopEntries.call(tournament: @tournament, limit: 8)
+      assert_equal ["B", "C", "A", "D"], result.map { |r| r[:entry].users.first.name }
     end
 
     test "excludes entries with zero catches" do
@@ -35,15 +45,15 @@ module Tournaments
       add_angler("Skunked1", [])
       add_angler("Skunked2", [])
 
-      result = TopThree.call(tournament: @tournament)
+      result = TopEntries.call(tournament: @tournament, limit: 4)
       assert_equal ["A", "B"], result.map { |r| r[:entry].users.first.name }
     end
 
-    test "returns fewer than 3 if there aren't enough placers" do
+    test "returns fewer than the limit if there aren't enough placers" do
       add_angler("A", [20])
       add_angler("Skunked", [])
 
-      result = TopThree.call(tournament: @tournament)
+      result = TopEntries.call(tournament: @tournament, limit: 3)
       assert_equal 1, result.size
       assert_equal "A", result.first[:entry].users.first.name
     end
@@ -53,7 +63,7 @@ module Tournaments
       add_angler("B", [24, 20])  # total 44, biggest 24 → wins
       add_angler("C", [10])
 
-      result = TopThree.call(tournament: @tournament)
+      result = TopEntries.call(tournament: @tournament, limit: 3)
       assert_equal ["B", "A", "C"], result.map { |r| r[:entry].users.first.name }
     end
   end

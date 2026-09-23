@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_17_000001) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_20_201209) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -153,6 +153,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_17_000001) do
     t.datetime "created_at", null: false
     t.string "name", null: false
     t.boolean "recovery_tool_enabled", default: false, null: false
+    t.decimal "season_points_attendance", precision: 5, scale: 2, default: "0.5", null: false
+    t.jsonb "season_points_base_ladder", default: [3, 2, 1], null: false
+    t.jsonb "season_points_ladders", default: [[3, 2, 1], [6, 4, 2], [9, 6, 3], [9, 6, 3]], null: false
+    t.integer "season_points_min_entries", default: 3, null: false
+    t.integer "season_points_scheme", default: 0, null: false
+    t.jsonb "season_points_tier_multipliers", default: [1, 2, 3, 3], null: false
     t.datetime "updated_at", null: false
     t.index ["name"], name: "index_clubs_on_name", unique: true
   end

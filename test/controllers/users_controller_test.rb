@@ -6,27 +6,28 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
     sign_in_as(@user)
   end
 
-  test "PATCH /me updates length_unit to centimeters" do
-    patch me_path, params: { user: { length_unit: "centimeters" } }
-    assert_equal "centimeters", @user.reload.length_unit
+  test "PATCH /me updates length_unit, or rejects an invalid one" do
+    {
+      "valid value" => [ "centimeters", "centimeters" ],
+      "invalid value" => [ "feet", "inches" ]
+    }.each do |label, (value, expected)|
+      @user.update!(length_unit: "inches")
+      patch me_path, params: { user: { length_unit: value } }
+      assert_equal expected, @user.reload.length_unit, label
+    end
   end
 
-  test "PATCH /me rejects invalid length_unit" do
-    patch me_path, params: { user: { length_unit: "feet" } }
-    assert_equal "inches", @user.reload.length_unit
-  end
-
-  test "PATCH /me as JSON updates length_unit and returns 204" do
-    patch me_path, params: { user: { length_unit: "centimeters" } }, as: :json
-    assert_response :no_content
-    assert_equal "centimeters", @user.reload.length_unit
-  end
-
-  test "PATCH /me as JSON rejects invalid length_unit with 422" do
-    patch me_path, params: { user: { length_unit: "feet" } }, as: :json
-    assert_response :unprocessable_entity
-    assert_equal "inches", @user.reload.length_unit
-    assert_includes JSON.parse(response.body)["errors"].join(" "), "Length unit"
+  test "PATCH /me as JSON updates length_unit and returns 204, or rejects an invalid one with 422" do
+    {
+      "valid value" => [ "centimeters", "centimeters", :no_content ],
+      "invalid value" => [ "feet", "inches", :unprocessable_entity ]
+    }.each do |label, (value, expected, expected_status)|
+      @user.update!(length_unit: "inches")
+      patch me_path, params: { user: { length_unit: value } }, as: :json
+      assert_response expected_status, label
+      assert_equal expected, @user.reload.length_unit, label
+      assert_includes JSON.parse(response.body)["errors"].join(" "), "Length unit", label if expected_status == :unprocessable_entity
+    end
   end
 
   private

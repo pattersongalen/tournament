@@ -80,6 +80,7 @@ Rails.application.routes.draw do
           collection { get :history }
         end
         resource :banner, only: [:edit, :update], controller: "banners"
+        resource :season_points, only: [:edit, :update], controller: "season_points"
       end
     end
     resources :tournaments do

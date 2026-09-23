@@ -446,6 +446,9 @@ class Organizers::BoatsControllerTest < ActionDispatch::IntegrationTest
 
     get organizers_boats_path
 
+    # Positive anchor first: the assert_no_match below must not pass merely
+    # because the Retired section failed to render at all.
+    assert_select "form[action=?]", purge_organizers_boat_path(@boat), count: 1
     assert_no_match(/past entr/, response.body)
   end
 

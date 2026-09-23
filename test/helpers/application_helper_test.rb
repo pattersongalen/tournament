@@ -9,61 +9,41 @@ class ApplicationHelperTest < ActionView::TestCase
     OpenStruct.new(starts_at: starts_at, ends_at: ends_at)
   end
 
-  test "returns nil when starts_at is missing" do
-    assert_nil tournament_window(tournament(starts_at: nil))
+  test "tournament_window formats the start/end moments" do
+    {
+      "missing starts_at returns nil" => [tournament(starts_at: nil), nil],
+      "no ends_at renders the start moment" =>
+        [tournament(starts_at: Time.zone.local(2026, 9, 20, 8, 0)), "Sep 20 · 8:00 AM"],
+      "same-day window collapses to one date with two times" =>
+        [tournament(starts_at: Time.zone.local(2026, 9, 20, 8, 0), ends_at: Time.zone.local(2026, 9, 20, 17, 0)),
+         "Sep 20 · 8:00 AM – 5:00 PM"],
+      "multi-day window shows both moments separately" =>
+        [tournament(starts_at: Time.zone.local(2026, 9, 20, 8, 0), ends_at: Time.zone.local(2026, 9, 22, 17, 0)),
+         "Sep 20 · 8:00 AM – Sep 22 · 5:00 PM"],
+      "prior year includes the year in the date" =>
+        [tournament(starts_at: Time.zone.local(2025, 9, 20, 8, 0)), "Sep 20, 2025 · 8:00 AM"]
+    }.each do |label, (t, expected)|
+      actual = tournament_window(t)
+      expected.nil? ? assert_nil(actual, label) : assert_equal(expected, actual, label)
+    end
   end
 
-  test "no ends_at — renders the start moment" do
-    starts = Time.zone.local(2026, 9, 20, 8, 0)
-    assert_equal "Sep 20 · 8:00 AM", tournament_window(tournament(starts_at: starts))
-  end
-
-  test "same-day window collapses to one date with two times" do
-    starts = Time.zone.local(2026, 9, 20, 8, 0)
-    ends   = Time.zone.local(2026, 9, 20, 17, 0)
-    assert_equal "Sep 20 · 8:00 AM – 5:00 PM",
-                 tournament_window(tournament(starts_at: starts, ends_at: ends))
-  end
-
-  test "multi-day window shows both moments separately" do
-    starts = Time.zone.local(2026, 9, 20, 8, 0)
-    ends   = Time.zone.local(2026, 9, 22, 17, 0)
-    assert_equal "Sep 20 · 8:00 AM – Sep 22 · 5:00 PM",
-                 tournament_window(tournament(starts_at: starts, ends_at: ends))
-  end
-
-  test "prior year includes the year in the date" do
-    starts = Time.zone.local(2025, 9, 20, 8, 0)
-    assert_equal "Sep 20, 2025 · 8:00 AM", tournament_window(tournament(starts_at: starts))
-  end
-
-  # Regression for the %l → %-l fix. %l is blank-padded ("  8:00 AM"); %-l is
-  # not. Without %-l, the rendered string ends up with a double space which
-  # the previous .squeeze(" ") was working around.
-  test "uses unpadded hour format — no double spaces" do
-    starts = Time.zone.local(2026, 9, 20, 8, 0)
-    output = tournament_window(tournament(starts_at: starts))
-    assert_not_includes output, "  ", "should not contain double spaces"
-  end
-
-  test "format_season_points renders 0 as plain integer" do
-    assert_equal "0", format_season_points(0)
-  end
-
-  test "format_season_points trims .0 from whole-number floats" do
-    assert_equal "6", format_season_points(6.0)
-  end
-
-  test "format_season_points keeps integer values plain" do
-    assert_equal "3", format_season_points(3)
-  end
-
-  test "format_season_points renders halves with one decimal" do
-    assert_equal "3.5", format_season_points(3.5)
-  end
-
-  test "format_season_points renders bare half" do
-    assert_equal "0.5", format_season_points(0.5)
+  # FIX 3 regression: the base_ladder scheme rounds multiplier results to 2
+  # dp (e.g. base [3, 2, 1] x multiplier 1.25 = [3.75, 2.5, 1.25]). Formatting
+  # at 1 dp truncated 3.75 to "3.8", so a member's nightly values no longer
+  # added up to their own season total.
+  test "format_season_points renders plain integers, trims trailing zeros, keeps needed decimals" do
+    {
+      0    => "0",
+      6.0  => "6",
+      3    => "3",
+      3.5  => "3.5",
+      0.5  => "0.5",
+      3.75 => "3.75",
+      2.5  => "2.5"
+    }.each do |value, expected|
+      assert_equal expected, format_season_points(value), "format_season_points(#{value})"
+    end
   end
 
   test "ordered_species returns species alphabetically and memoizes the load" do
@@ -73,23 +53,14 @@ class ApplicationHelperTest < ActionView::TestCase
     assert_same ordered_species, ordered_species, "should reuse the memoized array"
   end
 
-  test "banner_strip_classes returns the yellow set for info" do
-    assert_equal "bg-yellow-500/20 border-yellow-500/40 text-yellow-200",
-                 banner_strip_classes("info")
-  end
-
-  test "banner_strip_classes returns the green set for good" do
-    assert_equal "bg-emerald-500/20 border-emerald-500/40 text-emerald-200",
-                 banner_strip_classes("good")
-  end
-
-  test "banner_strip_classes returns the red set for alert" do
-    assert_equal "bg-red-500/20 border-red-500/40 text-red-200",
-                 banner_strip_classes("alert")
-  end
-
-  test "banner_strip_classes falls back to info for unknown values" do
-    assert_equal "bg-yellow-500/20 border-yellow-500/40 text-yellow-200",
-                 banner_strip_classes(nil)
+  test "banner_strip_classes maps style to its color classes, defaulting unknowns to info" do
+    {
+      "info"  => "bg-yellow-500/20 border-yellow-500/40 text-yellow-200",
+      "good"  => "bg-emerald-500/20 border-emerald-500/40 text-emerald-200",
+      "alert" => "bg-red-500/20 border-red-500/40 text-red-200",
+      nil     => "bg-yellow-500/20 border-yellow-500/40 text-yellow-200"
+    }.each do |style, expected|
+      assert_equal expected, banner_strip_classes(style), "style=#{style.inspect}"
+    end
   end
 end

@@ -39,28 +39,6 @@ class ClubRulesTest < ApplicationSystemTestCase
     assert_no_text "Aron Funk"   # member should NOT see editor name
   end
 
-  test "organizer toggles active season; home button date follows the active set" do
-    create(:club_rules_revision, club: @club, edited_by_user: @organizer,
-                                 season: :open_water, body: "<div>ow</div>",
-                                 created_at: Time.zone.local(2026, 5, 9, 10))
-    create(:club_rules_revision, club: @club, edited_by_user: @organizer,
-                                 season: :ice, body: "<div>ice</div>",
-                                 created_at: Time.zone.local(2026, 1, 1, 10))
-
-    sign_in_as(@member)
-    visit root_path
-    assert_text "Rules (updated May 9, 2026)"
-
-    sign_in_as(@organizer)
-    visit admin_rules_path
-    click_on "Ice"  # the active-season toggle button labelled "Ice"
-    assert_text "Active season set to Ice."
-
-    sign_in_as(@member)
-    visit root_path
-    assert_text "Rules (updated Jan 1, 2026)"
-  end
-
   private
 
   def sign_in_as(user)

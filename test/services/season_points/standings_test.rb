@@ -71,6 +71,25 @@ module SeasonPoints
                       "standings query count grew with tournament count (#{q1} -> #{q4}): N+1 over tournaments"
     end
 
+    test "full_field standings pay the whole scoring field, ladder sized by entries" do
+      @club.update!(season_points_scheme: :full_field)
+      t, in_window = build_finished(season_tag: "FF")
+      a = add_solo(tournament: t, in_window: in_window, name: "FF-A", lengths: [25])
+      b = add_solo(tournament: t, in_window: in_window, name: "FF-B", lengths: [20])
+      c = add_solo(tournament: t, in_window: in_window, name: "FF-C", lengths: [15])
+      d = add_solo(tournament: t, in_window: in_window, name: "FF-D", lengths: [10])
+      e = add_solo(tournament: t, in_window: in_window, name: "FF-E", lengths: [])
+
+      by_id = Standings.call(club: @club, season_tag: "FF").index_by { |r| r[:user].id }
+
+      # 5 entries → ladder [5,4,3,2,1]; only 4 boats scored, so rung 1 is unclaimed.
+      assert_equal 5.5, by_id[a.id][:points]
+      assert_equal 4.5, by_id[b.id][:points]
+      assert_equal 3.5, by_id[c.id][:points]
+      assert_equal 2.5, by_id[d.id][:points]
+      assert_equal 0.5, by_id[e.id][:points]
+    end
+
     test "returns [] for nil season_tag" do
       assert_equal [], Standings.call(club: @club, season_tag: nil)
     end

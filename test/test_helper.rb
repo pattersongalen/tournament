@@ -5,7 +5,8 @@ require "rails/test_help"
 module ActiveSupport
   class TestCase
     # Run tests in parallel with specified workers
-    parallelize(workers: :number_of_processors)
+    # threshold: the system suite is ~45 tests after the 2026-08 reduction; Rails' default threshold of 50 would silently run it in one process (~4 min instead of ~30 s).
+    parallelize(workers: :number_of_processors, threshold: 10)
 
     # Setup all fixtures in test/fixtures/*.yml for all tests in alphabetical order.
     fixtures :all

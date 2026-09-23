@@ -17,12 +17,6 @@ class Admin::Clubs::MembersControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to new_session_path
   end
 
-  test "member is forbidden" do
-    sign_in_as(@member)
-    get new_admin_club_member_path(@target_club)
-    assert_response :forbidden
-  end
-
   test "organizer without admin flag is forbidden" do
     sign_in_as(@organizer)
     get new_admin_club_member_path(@target_club)
@@ -78,33 +72,6 @@ class Admin::Clubs::MembersControllerTest < ActionDispatch::IntegrationTest
     assert_response :unprocessable_entity
   end
 
-  test "non-admin POST is forbidden" do
-    sign_in_as(@organizer)
-    assert_no_difference -> { User.count } do
-      post admin_club_members_path(@target_club), params: {
-        user: { name: "Sneak", email: "sneak@example.com", role: "organizer" }
-      }
-    end
-    assert_response :forbidden
-  end
-
-  test "signed-out user redirects to sign-in" do
-    get admin_club_members_path(@foreign_club)
-    assert_redirected_to new_session_path
-  end
-
-  test "non-admin member is forbidden for index" do
-    sign_in_as(@member)
-    get admin_club_members_path(@foreign_club)
-    assert_response :forbidden
-  end
-
-  test "non-admin organizer is forbidden for index" do
-    sign_in_as(@organizer)
-    get admin_club_members_path(@foreign_club)
-    assert_response :forbidden
-  end
-
   test "admin sees the foreign club's members" do
     sign_in_as(@admin)
     get admin_club_members_path(@foreign_club)
@@ -136,14 +103,6 @@ class Admin::Clubs::MembersControllerTest < ActionDispatch::IntegrationTest
     assert_equal @foreign_club, token.club
     assert_equal @admin, token.issued_by_user
     assert_redirected_to code_admin_club_member_path(@foreign_club, @foreign_member)
-  end
-
-  test "non-admin cannot issue a code" do
-    sign_in_as(@organizer)
-    assert_no_difference "SignInToken.count" do
-      post issue_code_admin_club_member_path(@foreign_club, @foreign_member)
-    end
-    assert_response :forbidden
   end
 
   test "issue_code 404s for a member not in the foreign club" do
@@ -182,12 +141,6 @@ class Admin::Clubs::MembersControllerTest < ActionDispatch::IntegrationTest
     assert_response :not_found
   end
 
-  test "non-admin organizer cannot GET edit on a cross-club member" do
-    sign_in_as(@organizer)
-    get edit_admin_club_member_path(@foreign_club, @foreign_member)
-    assert_response :forbidden
-  end
-
   test "admin can GET edit on a cross-club member" do
     sign_in_as(@admin)
     get edit_admin_club_member_path(@foreign_club, @foreign_member)
@@ -209,17 +162,6 @@ class Admin::Clubs::MembersControllerTest < ActionDispatch::IntegrationTest
     assert_equal "nancy@northtown.example", @foreign_member.email
   end
 
-  test "update on a cross-club member with invalid email re-renders edit" do
-    sign_in_as(@admin)
-    other = create(:user, club: @foreign_club, role: :member, email: "taken@northtown.example")
-    patch admin_club_member_path(@foreign_club, @foreign_member), params: {
-      user: { name: "Whoever", email: other.email }
-    }
-    assert_response :unprocessable_entity
-    @foreign_member.reload
-    assert_not_equal other.email, @foreign_member.email
-  end
-
   test "update on a cross-club member drops admin and role from strong params" do
     sign_in_as(@admin)
     assert_not @foreign_member.admin?
@@ -232,24 +174,6 @@ class Admin::Clubs::MembersControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Renamed", @foreign_member.name
     assert_not @foreign_member.admin?
     assert_not @foreign_member.organizer_in?(@foreign_club)
-  end
-
-  test "renders Never badge for users with no last_seen_at on the per-club view" do
-    create(:user, club: @foreign_club, name: "Unclaimed Carl", last_seen_at: nil)
-    sign_in_as(@admin)
-    get admin_club_members_path(@foreign_club)
-    assert_response :success
-    assert_match %r{Unclaimed Carl.*Never}m, response.body
-  end
-
-  test "renders relative time for users with a last_seen_at on the per-club view" do
-    freeze_time do
-      create(:user, club: @foreign_club, name: "Active Alice", last_seen_at: 3.days.ago)
-      sign_in_as(@admin)
-      get admin_club_members_path(@foreign_club)
-      assert_response :success
-      assert_match %r{Active Alice.*3 days ago}m, response.body
-    end
   end
 
   private

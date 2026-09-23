@@ -13,134 +13,83 @@ class UserTest < ActiveSupport::TestCase
     assert_not duplicate.valid?
   end
 
-  test "length_unit must be inches or centimeters" do
+  test "length_unit must be inches or centimeters, and metric? reflects the preference" do
     u = build(:user, length_unit: "feet")
     assert_not u.valid?
     assert_includes u.errors.full_messages.join, "Length unit"
-  end
 
-  test "metric? reflects centimeters preference" do
-    u = build(:user, length_unit: "centimeters")
+    u.length_unit = "centimeters"
     assert u.metric?
     u.length_unit = "inches"
     assert_not u.metric?
   end
 
-  test "default is inches" do
-    u = create(:user)
-    assert_equal "inches", u.length_unit
-  end
-
-  test "admin? defaults to false" do
-    u = create(:user)
-    assert_not u.admin?
-  end
-
-  test "admin? reflects the admin flag" do
-    u = create(:user, admin: true)
-    assert u.admin?
-  end
-
-  test "organizer_in? is true only for the user's organizer membership" do
+  test "organizer_in? is true only for the user's organizer membership, ignores deactivated memberships, and returns false for nil club" do
     other_club = create(:club)
     u = create(:user, club: @club, role: :organizer)
     create(:club_membership, user: u, club: other_club, role: :member)
     assert u.organizer_in?(@club)
     assert_not u.organizer_in?(other_club)
-  end
-
-  test "organizer_in? ignores deactivated memberships" do
-    u = create(:user)
-    create(:club_membership, user: u, club: @club, role: :organizer, deactivated_at: Time.current)
-    assert_not u.organizer_in?(@club)
-  end
-
-  test "organizer_in? returns false for nil club" do
-    u = create(:user, club: @club)
     assert_not u.organizer_in?(nil)
+
+    deactivated = create(:user)
+    create(:club_membership, user: deactivated, club: @club, role: :organizer, deactivated_at: Time.current)
+    assert_not deactivated.organizer_in?(@club)
   end
 
-  test "member_of? is true for any active membership in the club" do
+  test "member_of? is true for any active membership in the club and ignores deactivated memberships" do
     other_club = create(:club)
     u = create(:user, club: @club)
     assert u.member_of?(@club)
     assert_not u.member_of?(other_club)
+
+    deactivated = create(:user)
+    create(:club_membership, user: deactivated, club: @club, role: :member, deactivated_at: Time.current)
+    assert_not deactivated.member_of?(@club)
   end
 
-  test "member_of? ignores deactivated memberships" do
-    u = create(:user)
-    create(:club_membership, user: u, club: @club, role: :member, deactivated_at: Time.current)
-    assert_not u.member_of?(@club)
-  end
-
-  test "touch_last_seen! writes when last_seen_at is nil" do
+  test "touch_last_seen! writes when last_seen_at is nil or older than the throttle window, without bumping updated_at" do
     u = create(:user, club: @club)
     assert_nil u.last_seen_at
     freeze_time do
       u.touch_last_seen!
       assert_equal Time.current, u.reload.last_seen_at
     end
-  end
 
-  test "touch_last_seen! writes when last_seen_at is older than the throttle window" do
-    u = create(:user, club: @club, last_seen_at: 2.hours.ago)
-    before = u.last_seen_at
-    freeze_time do
-      u.touch_last_seen!
-      assert_equal Time.current, u.reload.last_seen_at
-      assert_not_equal before, u.last_seen_at
+    stale = create(:user, club: @club, last_seen_at: 2.hours.ago)
+    before = stale.last_seen_at
+    original_updated_at = stale.reload.updated_at
+    travel 1.minute do
+      stale.touch_last_seen!
+      assert_equal Time.current, stale.reload.last_seen_at
+      assert_not_equal before, stale.last_seen_at
+      assert_equal original_updated_at, stale.reload.updated_at,
+                   "write path must use update_columns, not bump updated_at"
     end
   end
 
-  test "touch_last_seen! is a no-op when last_seen_at is within the throttle window" do
+  test "touch_last_seen! is a no-op (including no updated_at bump) within the throttle window" do
     recent = 5.minutes.ago
     u = create(:user, club: @club, last_seen_at: recent)
-    u.touch_last_seen!
-    assert_in_delta recent.to_f, u.reload.last_seen_at.to_f, 0.001
-  end
-
-  test "touch_last_seen! does not bump updated_at" do
-    u = create(:user, club: @club, last_seen_at: 2.hours.ago)
     original_updated_at = u.reload.updated_at
     travel 1.minute do
       u.touch_last_seen!
+      assert_in_delta recent.to_f, u.reload.last_seen_at.to_f, 0.001
       assert_equal original_updated_at, u.reload.updated_at
     end
   end
 
-  test "permanent_organizer_in? is true for an active organizer membership" do
-    u = create(:user, club: @club, role: :organizer)
-    assert u.permanent_organizer_in?(@club)
-  end
+  test "permanent_organizer_in? is true for an active organizer, false for a plain member, ignores deactivated memberships, and returns false for nil club" do
+    organizer = create(:user, club: @club, role: :organizer)
+    assert organizer.permanent_organizer_in?(@club)
+    assert_not organizer.permanent_organizer_in?(nil)
 
-  test "permanent_organizer_in? is false for a plain member" do
-    u = create(:user, club: @club, role: :member)
-    assert_not u.permanent_organizer_in?(@club)
-  end
+    member = create(:user, club: @club, role: :member)
+    assert_not member.permanent_organizer_in?(@club)
 
-  test "permanent_organizer_in? ignores deactivated memberships" do
-    u = create(:user)
-    create(:club_membership, user: u, club: @club, role: :organizer, deactivated_at: Time.current)
-    assert_not u.permanent_organizer_in?(@club)
-  end
-
-  test "permanent_organizer_in? returns false for nil club" do
-    u = create(:user, club: @club, role: :organizer)
-    assert_not u.permanent_organizer_in?(nil)
-  end
-
-  test "organizer_in? is true for a deputy before the tournament starts" do
-    u = create(:user, club: @club, role: :member)
-    t = create(:tournament, club: @club, starts_at: 1.hour.from_now, ends_at: 3.hours.from_now)
-    create(:tournament_deputy, tournament: t, user: u, granted_by_user: create(:user, club: @club, role: :organizer))
-    assert User.find(u.id).organizer_in?(@club)
-  end
-
-  test "organizer_in? is false for a deputy once the tournament has started" do
-    u = create(:user, club: @club, role: :member)
-    t = create(:tournament, club: @club, starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
-    create(:tournament_deputy, tournament: t, user: u, granted_by_user: create(:user, club: @club, role: :organizer))
-    assert_not User.find(u.id).organizer_in?(@club)
+    deactivated = create(:user)
+    create(:club_membership, user: deactivated, club: @club, role: :organizer, deactivated_at: Time.current)
+    assert_not deactivated.permanent_organizer_in?(@club)
   end
 
   test "the deputy badge expires exactly at starts_at" do

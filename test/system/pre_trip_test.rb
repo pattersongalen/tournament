@@ -7,7 +7,7 @@ class PreTripTest < ApplicationSystemTestCase
     create(:tournament, club: @club, starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
   end
 
-  test "pre-trip page shows checks" do
+  test "pre-trip page shows all checks and their initial passing state" do
     token = SignInToken.issue!(user: @user)
     visit consume_session_path(token: token.token)
     visit pre_trip_path
@@ -19,57 +19,35 @@ class PreTripTest < ApplicationSystemTestCase
     assert_selector "[data-check='clock']"
     assert_selector "[data-check='notifications']"
     assert_selector "[data-check='network']"
-  end
 
-  test "pre-trip page shows the app version row, up to date with the server build" do
-    token = SignInToken.issue!(user: @user)
-    visit consume_session_path(token: token.token)
-    visit pre_trip_path
-
-    # On a fresh load there is no stale cached shell, so the row settles on the
-    # up-to-date state and surfaces the current server build id.
+    # On a fresh load there is no stale cached shell, so the version row
+    # settles on the up-to-date state and surfaces the current server build
+    # id. This row's fetch can outrun a short wait under parallel load, so it
+    # gets a longer one.
     assert_selector "[data-check='version']"
-    assert_selector "[data-pre-trip-target='version']", text: "✓"
-    assert_selector "[data-pre-trip-target='version']", text: AppVersion.current[0, 7]
-  end
-
-  test "Re-test pings the server and flags an update when the loaded build is behind" do
-    token = SignInToken.issue!(user: @user)
-    visit consume_session_path(token: token.token)
-    visit pre_trip_path
-    assert_selector "[data-pre-trip-target='version']", text: "✓"
-
-    # Simulate a phone still showing a page rendered before a deploy: rewrite the
-    # build baked into the loaded page, then re-run the checks. The server (via
-    # /api/version) still reports the real current build, so the row must flag it.
-    page.execute_script("document.documentElement.dataset.appBuild = '0000000'")
-    click_button "Re-test"
-
-    assert_selector "[data-pre-trip-target='version']", text: "⚠ update available"
-    assert_selector "[data-pre-trip-target='version']", text: "0000000"
-    assert_selector "[data-pre-trip-target='version']", text: AppVersion.current[0, 7]
-    assert_selector "[data-check='version'] [data-pre-trip-hint]", text: "Update app (clear cache)"
-  end
-
-  test "a passing check shows no hint" do
-    token = SignInToken.issue!(user: @user)
-    visit consume_session_path(token: token.token)
-    visit pre_trip_path
+    assert page.has_selector?("[data-pre-trip-target='version']", text: "✓", wait: 10),
+      "version row should settle on up to date"
+    assert page.has_selector?("[data-pre-trip-target='version']", text: AppVersion.current[0, 7], wait: 10),
+      "version row should show the current server build id"
 
     # The session row can't fail — the page requires sign-in to reach.
     assert_selector "[data-pre-trip-target='session']", text: "✓"
     assert_no_selector "[data-check='session'] [data-pre-trip-hint]"
+
+    assert_selector "[data-pre-trip-target='session'].text-emerald-400"
+    assert_selector "[data-pre-trip-target='version'].text-emerald-400"
   end
 
-  test "Re-test clears a stale hint once the failing check starts passing" do
+  test "Re-test reflects new results: clears a stale hint and flags a stale app build" do
     token = SignInToken.issue!(user: @user)
     visit consume_session_path(token: token.token)
     visit pre_trip_path
 
-    # The version row is the last check to settle, so this waits out the entire
-    # page-load run. Stubbing before it finishes lets the old run's late
-    # callbacks overwrite the stubbed run's rows.
-    assert_selector "[data-pre-trip-target='version']", text: /✓|⚠|ℹ/
+    # The version row is the last check to settle, so this waits out the
+    # entire page-load run. Stubbing before it finishes lets the old run's
+    # late callbacks overwrite the stubbed run's rows.
+    assert page.has_selector?("[data-pre-trip-target='version']", text: /✓|⚠|ℹ/, wait: 10),
+      "version row should settle before stubbing"
 
     # Force the camera check to fail: stub getUserMedia to reject like a real
     # browser would when the camera errors out, then Re-test to produce a
@@ -79,29 +57,41 @@ class PreTripTest < ApplicationSystemTestCase
     JS
     click_button "Re-test"
 
-    assert_selector "[data-pre-trip-target='camera']", text: "✗"
-    assert_selector "[data-check='camera'] [data-pre-trip-hint]", text: "no rear camera"
+    assert page.has_selector?("[data-pre-trip-target='camera']", text: "✗", wait: 5),
+      "camera should fail after a rejected getUserMedia"
+    assert page.has_selector?("[data-check='camera'] [data-pre-trip-hint]", text: "no rear camera", wait: 5),
+      "camera hint should explain the missing camera"
 
     # Now make the same check pass and Re-test again. The row must flip to ✓
     # AND the hint paragraph left over from the failing run must be cleared —
-    # this is the stale-hint-clearing path the earlier "no hint" test can't
-    # reach, since that test's check (session) never fails in the first place.
+    # this is the stale-hint-clearing path the initial-state test can't
+    # reach, since that test's check (session) never fails in the first
+    # place.
     page.execute_script(<<~JS)
       navigator.mediaDevices.getUserMedia = () => Promise.resolve({ getTracks: () => [] })
     JS
     click_button "Re-test"
 
-    assert_selector "[data-pre-trip-target='camera'].text-emerald-400", text: "✓"
-    assert_no_selector "[data-check='camera'] [data-pre-trip-hint]"
-  end
+    assert page.has_selector?("[data-pre-trip-target='camera'].text-emerald-400", text: "✓", wait: 5),
+      "camera should recover to green once getUserMedia succeeds again"
+    assert page.has_no_selector?("[data-check='camera'] [data-pre-trip-hint]", wait: 5),
+      "stale camera hint should be cleared once the check passes"
 
-  test "the session check renders green and the version check renders green" do
-    token = SignInToken.issue!(user: @user)
-    visit consume_session_path(token: token.token)
-    visit pre_trip_path
+    # Simulate a phone still showing a page rendered before a deploy: rewrite
+    # the build baked into the loaded page, then re-run the checks. The
+    # server (via /api/version) still reports the real current build, so the
+    # row must flag it.
+    page.execute_script("document.documentElement.dataset.appBuild = '0000000'")
+    click_button "Re-test"
 
-    assert_selector "[data-pre-trip-target='session'].text-emerald-400"
-    assert_selector "[data-pre-trip-target='version'].text-emerald-400"
+    assert page.has_selector?("[data-pre-trip-target='version']", text: "⚠ update available", wait: 10),
+      "version row should flag an available update"
+    assert page.has_selector?("[data-pre-trip-target='version']", text: "0000000", wait: 10),
+      "version row should show the stale loaded build id"
+    assert page.has_selector?("[data-pre-trip-target='version']", text: AppVersion.current[0, 7], wait: 10),
+      "version row should show the current server build id"
+    assert page.has_selector?("[data-check='version'] [data-pre-trip-hint]", text: "Update app (clear cache)", wait: 5),
+      "version hint should explain how to update"
   end
 end
 
@@ -133,7 +123,8 @@ class PreTripCameraCauseTest < ApplicationSystemTestCase
     # The version row is the last check to settle, so this waits out the entire
     # page-load run. Stubbing before it finishes lets the old run's late
     # callbacks overwrite the stubbed run's rows.
-    assert_selector "[data-pre-trip-target='version']", text: /✓|⚠|ℹ/
+    assert page.has_selector?("[data-pre-trip-target='version']", text: /✓|⚠|ℹ/, wait: 10),
+      "version row should settle before stubbing"
   end
 
   # Rejects getUserMedia with the named DOMException, then re-runs the checks.
@@ -145,32 +136,27 @@ class PreTripCameraCauseTest < ApplicationSystemTestCase
     click_button "Re-test"
   end
 
-  test "a denied camera permission says how to unblock it" do
-    rerun_with_media_error("NotAllowedError")
+  test "camera and microphone errors report their own cause and hint" do
+    [
+      # [DOMException name, status selector, status text, hint selector, hint text]
+      ["NotAllowedError", "[data-pre-trip-target='camera'].text-red-400", "✗ blocked",
+        "[data-check='camera'] [data-pre-trip-hint]", "set Camera to Allow"],
+      ["NotFoundError", "[data-pre-trip-target='camera']", "✗ no camera found",
+        "[data-check='camera'] [data-pre-trip-hint]", "no rear camera"],
+      ["NotReadableError", "[data-pre-trip-target='camera']", "✗ camera busy",
+        "[data-check='camera'] [data-pre-trip-hint]", "Another app is using the camera"],
+      # Same rejected getUserMedia call also fails the microphone row, which
+      # reports its own cause and points out that photo catches still work.
+      ["NotFoundError", "[data-pre-trip-target='microphone']", "✗ no microphone found",
+        "[data-check='microphone'] [data-pre-trip-hint]", "only video catches need one"],
+    ].each do |error, status_selector, status_text, hint_selector, hint_text|
+      rerun_with_media_error(error)
 
-    assert_selector "[data-pre-trip-target='camera'].text-red-400", text: "✗ blocked"
-    assert_selector "[data-check='camera'] [data-pre-trip-hint]", text: "set Camera to Allow"
-  end
-
-  test "a missing camera says to use a phone, not to change permissions" do
-    rerun_with_media_error("NotFoundError")
-
-    assert_selector "[data-pre-trip-target='camera']", text: "✗ no camera found"
-    assert_selector "[data-check='camera'] [data-pre-trip-hint]", text: "no rear camera"
-  end
-
-  test "a busy camera says to close the other app" do
-    rerun_with_media_error("NotReadableError")
-
-    assert_selector "[data-pre-trip-target='camera']", text: "✗ camera busy"
-    assert_selector "[data-check='camera'] [data-pre-trip-hint]", text: "Another app is using the camera"
-  end
-
-  test "the microphone reports its own cause and says photo catches still work" do
-    rerun_with_media_error("NotFoundError")
-
-    assert_selector "[data-pre-trip-target='microphone']", text: "✗ no microphone found"
-    assert_selector "[data-check='microphone'] [data-pre-trip-hint]", text: "only video catches need one"
+      assert page.has_selector?(status_selector, text: status_text, wait: 5),
+        "#{error} on #{status_selector}: expected status #{status_text.inspect}"
+      assert page.has_selector?(hint_selector, text: hint_text, wait: 5),
+        "#{error} on #{status_selector}: expected hint #{hint_text.inspect}"
+    end
   end
 end
 
@@ -185,7 +171,8 @@ class PreTripGpsCauseTest < ApplicationSystemTestCase
     # The version row is the last check to settle, so this waits out the entire
     # page-load run. Stubbing before it finishes lets the old run's late
     # callbacks overwrite the stubbed run's rows.
-    assert_selector "[data-pre-trip-target='version']", text: /✓|⚠|ℹ/
+    assert page.has_selector?("[data-pre-trip-target='version']", text: /✓|⚠|ℹ/, wait: 10),
+      "version row should settle before stubbing"
   end
 
   # Replaces getCurrentPosition with one that succeeds at the given accuracy and
@@ -218,67 +205,80 @@ class PreTripGpsCauseTest < ApplicationSystemTestCase
     click_button "Re-test"
   end
 
-  test "a denied location says to unblock it, not to step outside" do
-    rerun_with_position_error(1)
+  test "position errors report their own cause, and a failed fix disables the clock check" do
+    {
+      # PositionError code => { selector => expected text, ... }
+      1 => {
+        "[data-pre-trip-target='gps'].text-red-400" => "✗ blocked",
+        "[data-check='gps'] [data-pre-trip-hint]" => "Allow location in your browser's site settings",
+      },
+      2 => {
+        "[data-pre-trip-target='gps'].text-red-400" => "✗ no fix",
+        "[data-check='gps'] [data-pre-trip-hint]" => "Turn Location Services off and back on",
+        # A failed fix leaves the clock check with nothing to compare against.
+        "[data-pre-trip-target='clock'].text-amber-300" => "⚠ no GPS clock",
+        "[data-check='clock'] [data-pre-trip-hint]" => "Fix GPS above",
+      },
+      3 => {
+        "[data-pre-trip-target='gps'].text-red-400" => "✗ no fix (timeout)",
+        "[data-check='gps'] [data-pre-trip-hint]" => "No fix within 8 seconds",
+      },
+    }.each do |code, expectations|
+      rerun_with_position_error(code)
 
-    assert_selector "[data-pre-trip-target='gps'].text-red-400", text: "✗ blocked"
-    assert_selector "[data-check='gps'] [data-pre-trip-hint]", text: "Allow location in your browser's site settings"
+      expectations.each do |selector, text|
+        assert page.has_selector?(selector, text: text, wait: 5),
+          "position error #{code}: expected #{selector} to show #{text.inspect}"
+      end
+    end
   end
 
-  test "an unavailable fix says to cycle Location Services" do
-    rerun_with_position_error(2)
+  test "gps fix accuracy and clock skew report status and hints" do
+    [
+      {
+        accuracy: 12, skew_ms: 0,
+        present: { "[data-pre-trip-target='gps'].text-emerald-400" => "✓ 12m" },
+        absent: [ "[data-check='gps'] [data-pre-trip-hint]" ],
+      },
+      {
+        accuracy: 120, skew_ms: 0,
+        present: {
+          "[data-pre-trip-target='gps'].text-amber-300" => "⚠ 120m (low)",
+          "[data-check='gps'] [data-pre-trip-hint]" => "may be flagged for judge review",
+        },
+      },
+      {
+        accuracy: 400, skew_ms: 0,
+        present: {
+          "[data-pre-trip-target='gps'].text-red-400" => "✗ 400m",
+          "[data-check='gps'] [data-pre-trip-hint]" => "Too imprecise to place a catch",
+        },
+      },
+      {
+        accuracy: 12, skew_ms: 12 * 60 * 1000,
+        present: {
+          "[data-pre-trip-target='clock'].text-red-400" => "✗ 12m skew (> 5)",
+          "[data-check='clock'] [data-pre-trip-hint]" => "Date & Time",
+        },
+      },
+      {
+        accuracy: 12, skew_ms: 2000,
+        present: { "[data-pre-trip-target='clock'].text-emerald-400" => "✓" },
+        absent: [ "[data-check='clock'] [data-pre-trip-hint]" ],
+      },
+    ].each do |row|
+      rerun_with_fix(accuracy: row[:accuracy], skew_ms: row[:skew_ms])
+      label = "accuracy=#{row[:accuracy]} skew_ms=#{row[:skew_ms]}"
 
-    assert_selector "[data-pre-trip-target='gps'].text-red-400", text: "✗ no fix"
-    assert_selector "[data-check='gps'] [data-pre-trip-hint]", text: "Turn Location Services off and back on"
-  end
-
-  test "a timed-out fix reports the timeout, not a denial" do
-    rerun_with_position_error(3)
-
-    assert_selector "[data-pre-trip-target='gps'].text-red-400", text: "✗ no fix (timeout)"
-    assert_selector "[data-check='gps'] [data-pre-trip-hint]", text: "No fix within 8 seconds"
-  end
-
-  test "a failed fix leaves the clock check unable to run, and says so" do
-    rerun_with_position_error(2)
-
-    assert_selector "[data-pre-trip-target='clock'].text-amber-300", text: "⚠ no GPS clock"
-    assert_selector "[data-check='clock'] [data-pre-trip-hint]", text: "Fix GPS above"
-  end
-
-  test "a good fix is green and carries no hint" do
-    rerun_with_fix(accuracy: 12)
-
-    assert_selector "[data-pre-trip-target='gps'].text-emerald-400", text: "✓ 12m"
-    assert_no_selector "[data-check='gps'] [data-pre-trip-hint]"
-  end
-
-  test "a low-accuracy fix warns that the catch may be flagged" do
-    rerun_with_fix(accuracy: 120)
-
-    assert_selector "[data-pre-trip-target='gps'].text-amber-300", text: "⚠ 120m (low)"
-    assert_selector "[data-check='gps'] [data-pre-trip-hint]", text: "may be flagged for judge review"
-  end
-
-  test "a very inaccurate fix fails rather than warns" do
-    rerun_with_fix(accuracy: 400)
-
-    assert_selector "[data-pre-trip-target='gps'].text-red-400", text: "✗ 400m"
-    assert_selector "[data-check='gps'] [data-pre-trip-hint]", text: "Too imprecise to place a catch"
-  end
-
-  test "a skewed clock names the judge-review consequence and the fix" do
-    rerun_with_fix(accuracy: 12, skew_ms: 12 * 60 * 1000)
-
-    assert_selector "[data-pre-trip-target='clock'].text-red-400", text: "✗ 12m skew (> 5)"
-    assert_selector "[data-check='clock'] [data-pre-trip-hint]", text: "Date & Time"
-  end
-
-  test "a clock within tolerance is green and carries no hint" do
-    rerun_with_fix(accuracy: 12, skew_ms: 2000)
-
-    assert_selector "[data-pre-trip-target='clock'].text-emerald-400", text: "✓"
-    assert_no_selector "[data-check='clock'] [data-pre-trip-hint]"
+      row[:present].each do |selector, text|
+        assert page.has_selector?(selector, text: text, wait: 5),
+          "#{label}: expected #{selector} to show #{text.inspect}"
+      end
+      (row[:absent] || []).each do |selector|
+        assert page.has_no_selector?(selector, wait: 5),
+          "#{label}: expected no #{selector}"
+      end
+    end
   end
 
   test "the generation guard drops a stale run's late GPS callback" do
@@ -314,7 +314,8 @@ class PreTripGpsCauseTest < ApplicationSystemTestCase
     JS
     click_button "Re-test"
 
-    assert_selector "[data-pre-trip-target='gps'].text-emerald-400", text: "✓ 12m"
+    assert page.has_selector?("[data-pre-trip-target='gps'].text-emerald-400", text: "✓ 12m", wait: 5),
+      "the fast, current run should report the good fix"
 
     # Wait out the first (stale) run's 1500ms callback. Without the generation
     # guard in set(), this late write isn't dropped — it lands after the
@@ -323,8 +324,11 @@ class PreTripGpsCauseTest < ApplicationSystemTestCase
     # reported a good fix. That clobber is exactly what the guard prevents.
     sleep 2
 
-    assert_selector "[data-pre-trip-target='gps'].text-emerald-400", text: "✓ 12m"
-    assert_no_selector "[data-pre-trip-target='gps'].text-red-400"
-    assert_no_text "400m"
+    assert page.has_selector?("[data-pre-trip-target='gps'].text-emerald-400", text: "✓ 12m", wait: 5),
+      "the good fix should still be showing after the stale run's late callback"
+    assert page.has_no_selector?("[data-pre-trip-target='gps'].text-red-400", wait: 5),
+      "the stale run's failing state should never appear"
+    assert page.has_no_text?("400m", wait: 5),
+      "the stale run's inaccurate reading should never appear"
   end
 end

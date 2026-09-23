@@ -3,6 +3,14 @@ module SeasonPoints
     def self.call(club:, season_tag:)
       return [] if season_tag.nil?
 
+      # `club.tournaments.where(...)` returns an AssociationRelation, which
+      # sets the inverse association on every record it loads — so each
+      # tournament's `.club` below (called via SeasonPointsAwarded) is
+      # already populated and free. That's load-bearing: swapping this for
+      # `Tournament.where(club_id: ...)`, adding an `.unscope`, or a `.select`
+      # that drops the association would silently turn `tournament.club`
+      # into a per-tournament query again — no error, just a slow standings
+      # page. The N+1 guard test below is what catches that regression.
       tournaments = club.tournaments
         .where(awards_season_points: true, season_tag: season_tag)
         .where("ends_at < ?", ::Time.current)
@@ -52,12 +60,21 @@ module SeasonPoints
           total_capacity: capacity_by_tid[t.id] || 0,
           bingo_species_ids: bingo_species_ids
         )
-        top_three = ::Leaderboards::QualifiedRows.call(tournament: t, rows: rows).first(3)
+        entry_count = (entries_by_tid[t.id] || []).count { |e| e.users.any? }
+        # Ask for the scale first: full_field's ladder is as long as the field,
+        # so the number of ranked rows to keep isn't a constant 3 any more.
+        scale = ::Tournaments::PointsScale.call(club: club, entry_count: entry_count)
+        top_entries = if scale
+          ::Leaderboards::QualifiedRows.call(tournament: t, rows: rows).first(scale.length)
+        else
+          []
+        end
         awards = ::Tournaments::SeasonPointsAwarded.call(
           tournament: t,
-          top_three: top_three,
+          top_entries: top_entries,
           member_ids: member_ids_by_tid[t.id] || [],
-          entry_count: (entries_by_tid[t.id] || []).count { |e| e.users.any? }
+          entry_count: entry_count,
+          scale: scale
         )
         awards.each do |user_id, points|
           totals[user_id] += points

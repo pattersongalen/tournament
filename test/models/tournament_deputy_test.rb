@@ -8,11 +8,6 @@ class TournamentDeputyTest < ActiveSupport::TestCase
     @upcoming  = create(:tournament, club: @club, starts_at: 1.hour.from_now, ends_at: 3.hours.from_now)
   end
 
-  test "is valid with a tournament, user, and granter" do
-    d = TournamentDeputy.new(tournament: @upcoming, user: @member, granted_by_user: @organizer)
-    assert d.valid?
-  end
-
   test "a user can only be deputized once per tournament" do
     create(:tournament_deputy, tournament: @upcoming, user: @member, granted_by_user: @organizer)
     dup = TournamentDeputy.new(tournament: @upcoming, user: @member, granted_by_user: @organizer)

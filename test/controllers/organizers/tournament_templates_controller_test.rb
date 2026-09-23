@@ -19,118 +19,69 @@ class Organizers::TournamentTemplatesControllerTest < ActionDispatch::Integratio
     assert_redirected_to organizers_tournaments_path
   end
 
-  test "create accepts season_tag" do
+  test "create accepts season_tag, default_duration_days, awards_season_points, blind_leaderboard, and entrants_only_leaderboard together" do
     assert_difference -> { TournamentTemplate.count }, 1 do
       post organizers_tournament_templates_path, params: {
-        tournament_template: { name: "Wednesday League", mode: "solo", season_tag: "2026" }
+        tournament_template: {
+          name: "Wednesday League", mode: "solo",
+          season_tag: "2026", default_duration_days: 2,
+          awards_season_points: "1", blind_leaderboard: "1", entrants_only_leaderboard: "1"
+        }
       }
     end
     assert_redirected_to organizers_tournament_templates_path
-    assert_equal "2026", TournamentTemplate.last.season_tag
+    t = TournamentTemplate.last
+    {
+      season_tag: "2026",
+      default_duration_days: 2,
+      awards_season_points?: true,
+      blind_leaderboard?: true,
+      entrants_only_leaderboard?: true
+    }.each do |attr, expected|
+      assert_equal expected, t.public_send(attr), "#{attr}: should persist from a single submission"
+    end
   end
 
-  test "POST clone carries the template's season_tag onto the tournament" do
+  test "create accepts each format-specific permitted attribute" do
     walleye = create(:species, club: @club)
-    template = create(:tournament_template, club: @club, name: "Monthly Walleye", season_tag: "2026")
-    template.tournament_template_scoring_slots.create!(species: walleye, slot_count: 1)
+    perch   = create(:species, club: @club, name: "Perch")
+    pike    = create(:species, club: @club, name: "Pike")
 
-    post clone_organizers_tournament_template_path(template),
-         params: { starts_at: 1.day.from_now, ends_at: 1.day.from_now + 4.hours }
-
-    assert_equal "2026", Tournament.last.season_tag
-  end
-
-  test "create accepts awards_season_points: true" do
-    assert_difference -> { TournamentTemplate.count }, 1 do
-      post organizers_tournament_templates_path, params: {
-        tournament_template: {
-          name: "Wednesday League",
-          mode: "solo",
-          awards_season_points: "1"
+    {
+      "big_fish_season" => {
+        extra: { format: "big_fish_season",
+                 tournament_template_scoring_slots_attributes: { "0" => { species_id: walleye.id, slot_count: 1 } } },
+        check: ->(t) { assert t.format_big_fish_season?, "big_fish_season: format should persist" }
+      },
+      "hidden_length" => {
+        extra: { format: "hidden_length",
+                 tournament_template_scoring_slots_attributes: { "0" => { species_id: walleye.id, slot_count: 1 } } },
+        check: ->(t) { assert t.format_hidden_length?, "hidden_length: format should persist" }
+      },
+      "biggest_vs_smallest" => {
+        extra: { format: "biggest_vs_smallest",
+                 tournament_template_scoring_slots_attributes: { "0" => { species_id: walleye.id, slot_count: 1 } } },
+        check: ->(t) { assert t.format_biggest_vs_smallest?, "biggest_vs_smallest: format should persist" }
+      },
+      "fish_train" => {
+        extra: { format: "fish_train", train_cars: [ perch.id.to_s, pike.id.to_s, perch.id.to_s ],
+                 tournament_template_scoring_slots_attributes: {
+                   "0" => { species_id: perch.id, slot_count: 1 },
+                   "1" => { species_id: pike.id, slot_count: 1 }
+                 } },
+        check: ->(t) {
+          assert t.format_fish_train?, "fish_train: format should persist"
+          assert_equal [ perch.id, pike.id, perch.id ], t.train_cars, "fish_train: train_cars should persist"
         }
       }
-    end
-    assert_redirected_to organizers_tournament_templates_path
-    assert TournamentTemplate.last.awards_season_points?
-  end
-
-  test "creates a template with blind_leaderboard set" do
-    assert_difference -> { TournamentTemplate.count }, 1 do
-      post organizers_tournament_templates_path, params: {
-        tournament_template: { name: "Blind Night Template", mode: "solo", blind_leaderboard: "1" }
-      }
-    end
-    assert_redirected_to organizers_tournament_templates_path
-    assert TournamentTemplate.last.blind_leaderboard?
-  end
-
-  test "create accepts format: big_fish_season with one scoring slot" do
-    walleye = create(:species, club: @club)
-    assert_difference -> { TournamentTemplate.count }, 1 do
-      post organizers_tournament_templates_path, params: {
-        tournament_template: {
-          name: "BFS Monthly", mode: "solo", format: "big_fish_season",
-          tournament_template_scoring_slots_attributes: {
-            "0" => { species_id: walleye.id, slot_count: 1 }
-          }
+    }.each do |label, spec|
+      assert_difference -> { TournamentTemplate.count }, 1, "#{label}: should create a template" do
+        post organizers_tournament_templates_path, params: {
+          tournament_template: { name: "#{label} Monthly", mode: "solo" }.merge(spec[:extra])
         }
-      }
+      end
+      spec[:check].call(TournamentTemplate.order(:id).last)
     end
-    assert_redirected_to organizers_tournament_templates_path
-    assert TournamentTemplate.last.format_big_fish_season?
-  end
-
-  test "create accepts format: hidden_length with one scoring slot" do
-    walleye = create(:species, club: @club)
-    assert_difference -> { TournamentTemplate.count }, 1 do
-      post organizers_tournament_templates_path, params: {
-        tournament_template: {
-          name: "HL Monthly", mode: "solo", format: "hidden_length",
-          tournament_template_scoring_slots_attributes: {
-            "0" => { species_id: walleye.id, slot_count: 1 }
-          }
-        }
-      }
-    end
-    assert_redirected_to organizers_tournament_templates_path
-    assert TournamentTemplate.last.format_hidden_length?
-  end
-
-  test "create accepts format: biggest_vs_smallest with one scoring slot" do
-    walleye = create(:species, club: @club)
-    assert_difference -> { TournamentTemplate.count }, 1 do
-      post organizers_tournament_templates_path, params: {
-        tournament_template: {
-          name: "BvS Monthly", mode: "solo", format: "biggest_vs_smallest",
-          tournament_template_scoring_slots_attributes: {
-            "0" => { species_id: walleye.id, slot_count: 1 }
-          }
-        }
-      }
-    end
-    assert_redirected_to organizers_tournament_templates_path
-    assert TournamentTemplate.last.format_biggest_vs_smallest?
-  end
-
-  test "create accepts format: fish_train with train_cars and pool" do
-    perch = create(:species, club: @club, name: "Perch")
-    pike  = create(:species, club: @club, name: "Pike")
-    assert_difference -> { TournamentTemplate.count }, 1 do
-      post organizers_tournament_templates_path, params: {
-        tournament_template: {
-          name: "FT Monthly", mode: "solo", format: "fish_train",
-          train_cars: [perch.id.to_s, pike.id.to_s, perch.id.to_s],
-          tournament_template_scoring_slots_attributes: {
-            "0" => { species_id: perch.id, slot_count: 1 },
-            "1" => { species_id: pike.id,  slot_count: 1 }
-          }
-        }
-      }
-    end
-    assert_redirected_to organizers_tournament_templates_path
-    created = TournamentTemplate.last
-    assert created.format_fish_train?
-    assert_equal [perch.id, pike.id, perch.id], created.train_cars
   end
 
   test "an organizer pairs two templates from the form" do

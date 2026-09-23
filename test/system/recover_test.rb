@@ -9,14 +9,48 @@ class RecoverTest < ApplicationSystemTestCase
     @walleye = create(:species, club: @club, name: "Walleye")
   end
 
-  test "re-materializes a stuck photo and re-submits it as a real catch" do
+  # iOS restores /recover from the bfcache with whatever CSRF meta token the
+  # page was first rendered with; re-submitting with it fails on every tap
+  # until a hard reload — on the tool of last resort. resubmit() therefore
+  # preflights GET /api/session (same pattern as offline/sync.js) for a fresh
+  # token. The stale-token 422 itself can't be reproduced here (test env
+  # disables forgery protection, and with it the csrf meta tag), so this locks
+  # in the preflight behaviorally: a dead session must halt with a sign-in
+  # message BEFORE any photo-body POST is attempted — and once the session is
+  # back, the same button must push the stuck photo through for real.
+  test "re-submit halts on a dead session and re-submits the stuck catch once signed in" do
     uuid = SecureRandom.uuid
     sign_in_as(@user)
     seed_catch(uuid: uuid)
     visit "/recover"
 
     assert_selector "li img", wait: 5           # thumbnail => blob re-materialized
+
+    page.execute_script <<~JS
+      window.__realFetch = window.fetch.bind(window);
+      window.__catchPosts = 0;
+      window.fetch = (input, init = {}) => {
+        const url = String(input.url || input);
+        if (url.includes("/api/session")) {
+          return Promise.resolve(new Response("{}", { status: 401, headers: { "Content-Type": "application/json" } }));
+        }
+        if (url.includes("/api/catches")) window.__catchPosts++;
+        return window.__realFetch(input, init);
+      };
+    JS
     click_button "Re-submit"
+
+    assert page.has_text?(/signed out.*sign in/i, wait: 5),
+           "dead session: the angler must be told to sign in"
+    assert_equal 0, page.evaluate_script("window.__catchPosts"),
+                 "a dead session must halt resubmit before the photo-body POST"
+    assert_nil Catch.find_by(client_uuid: uuid), "dead session: nothing may be persisted"
+    assert page.has_selector?("button", text: "Retry", wait: 5),
+           "dead session: the row must stay retryable"
+
+    # Signed back in: the preflight now succeeds and the same button re-submits.
+    page.execute_script("window.fetch = window.__realFetch;")
+    click_button "Retry"
 
     catch_record = nil
     Timeout.timeout(15) do
@@ -27,8 +61,8 @@ class RecoverTest < ApplicationSystemTestCase
       end
     end
     assert catch_record, "expected /recover to re-submit the stuck catch"
-    assert_equal @user.id, catch_record.user_id
-    assert_equal 18, catch_record.length_inches.to_i
+    assert_equal @user.id, catch_record.user_id, "re-submit: wrong user"
+    assert_equal 18, catch_record.length_inches.to_i, "re-submit: wrong length"
     assert_selector "button", text: "Recovered", wait: 5
   end
 
@@ -60,82 +94,45 @@ class RecoverTest < ApplicationSystemTestCase
     assert_equal 1, stable_li_count
   end
 
-  # iOS restores /recover from the bfcache with whatever CSRF meta token the
-  # page was first rendered with; re-submitting with it fails on every tap
-  # until a hard reload — on the tool of last resort. resubmit() therefore
-  # preflights GET /api/session (same pattern as offline/sync.js) for a fresh
-  # token. The stale-token 422 itself can't be reproduced here (test env
-  # disables forgery protection, and with it the csrf meta tag), so this locks
-  # in the preflight behaviorally: a dead session must halt with a sign-in
-  # message BEFORE any photo-body POST is attempted.
-  test "re-submit preflights the session and halts with a sign-in message on 401" do
+  # The home link is offered for a catch that is genuinely stuck — failed, or
+  # pending for long enough that it is not simply mid-upload. Offering
+  # "Recover these with photos" for the second or two drain() takes trains
+  # anglers to reach for the recovery tool during perfectly healthy operation,
+  # so the age check is what separates the two pending cases below. Each step
+  # re-seeds the SAME client_uuid, so the queue holds exactly one row and every
+  # assertion is about that row's own state.
+  test "the home link appears only for a genuinely stuck catch" do
     uuid = SecureRandom.uuid
     sign_in_as(@user)
-    seed_catch(uuid: uuid)
-    visit "/recover"
-    assert_selector "li img", wait: 5
-
-    page.execute_script <<~JS
-      const realFetch = window.fetch.bind(window);
-      window.__catchPosts = 0;
-      window.fetch = (input, init = {}) => {
-        const url = String(input.url || input);
-        if (url.includes("/api/session")) {
-          return Promise.resolve(new Response("{}", { status: 401, headers: { "Content-Type": "application/json" } }));
-        }
-        if (url.includes("/api/catches")) window.__catchPosts++;
-        return realFetch(input, init);
-      };
-    JS
-    click_button "Re-submit"
-
-    assert_text(/signed out.*sign in/i, wait: 5)
-    assert_equal 0, page.evaluate_script("window.__catchPosts"),
-                 "a dead session must halt resubmit before the photo-body POST"
-    assert_nil Catch.find_by(client_uuid: uuid)
-    assert_selector "button", text: "Retry"
-  end
-
-  test "the home link appears only when the angler has stuck catches" do
-    sign_in_as(@user)
     visit root_path
     assert_no_selector "[data-pending-catches-target='recoverLink']", visible: true
 
-    seed_catch(uuid: SecureRandom.uuid)
-    visit root_path
-    assert_selector "[data-pending-catches-target='recoverLink']", visible: true, wait: 5
-  end
-
-  test "the home link appears for a pending-stuck catch, not just failed ones" do
-    sign_in_as(@user)
-    visit root_path
-    assert_no_selector "[data-pending-catches-target='recoverLink']", visible: true
+    # Merely mid-upload: queued a moment ago, so it is just syncing.
+    seed_catch(uuid: uuid, status: "pending", queued_ago_ms: 0, held_for_ms: 60_000)
+    # Re-render the widget without firing drain() (which would upload the record
+    # and empty the pending bucket). The controller refreshes on this event.
+    page.execute_script("window.dispatchEvent(new CustomEvent('bsfamilies:catch-failed', { detail: {} }))")
+    # Wait for the pending row to prove the render happened, so the link
+    # assertion isn't just winning a race.
+    assert page.has_selector?("[data-pending-catches-target='list'] li", wait: 5),
+           "mid-upload: the pending row must render"
+    assert page.has_no_selector?("[data-pending-catches-target='recoverLink']", visible: true),
+           "mid-upload: no recover link for a catch that is merely syncing"
 
     # Queued long enough ago to be stuck rather than in-flight. The age is what
     # makes this the pending-STUCK case: seeded at Date.now() it would be
     # indistinguishable from a catch that is simply mid-upload.
-    seed_catch(uuid: SecureRandom.uuid, status: "pending", queued_ago_ms: 10 * 60 * 1000,
+    seed_catch(uuid: uuid, status: "pending", queued_ago_ms: 10 * 60 * 1000,
                held_for_ms: 60_000)
-    # Re-render the widget without firing drain() (which would upload the record
-    # and empty the pending bucket). The controller refreshes on this event.
     page.execute_script("window.dispatchEvent(new CustomEvent('bsfamilies:catch-failed', { detail: {} }))")
-    assert_selector "[data-pending-catches-target='recoverLink']", visible: true, wait: 5
-  end
+    assert page.has_selector?("[data-pending-catches-target='recoverLink']", visible: true, wait: 5),
+           "pending-stuck: a long-queued pending catch must offer the recover link"
 
-  # The complement of the test above, and the reason the age check exists: a
-  # catch queued a moment ago is just syncing. Offering "Recover these with
-  # photos" for the second or two drain() takes trains anglers to reach for the
-  # recovery tool during perfectly healthy operation.
-  test "the home link stays hidden for a catch that is merely mid-upload" do
-    sign_in_as(@user)
+    # And the plain failed case, rendered by connect() on a fresh page load.
+    seed_catch(uuid: uuid)
     visit root_path
-
-    seed_catch(uuid: SecureRandom.uuid, status: "pending", queued_ago_ms: 0, held_for_ms: 60_000)
-    page.execute_script("window.dispatchEvent(new CustomEvent('bsfamilies:catch-failed', { detail: {} }))")
-    # The widget re-renders on that event; wait for the pending row to prove the
-    # render happened, so the link assertion isn't just winning a race.
-    assert_selector "[data-pending-catches-target='list'] li", wait: 5
-    assert_no_selector "[data-pending-catches-target='recoverLink']", visible: true
+    assert page.has_selector?("[data-pending-catches-target='recoverLink']", visible: true, wait: 5),
+           "failed: a failed catch must offer the recover link"
   end
 
   private

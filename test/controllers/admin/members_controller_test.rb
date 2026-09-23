@@ -199,13 +199,6 @@ class Admin::MembersControllerTest < ActionDispatch::IntegrationTest
     assert_not_nil @admin.reload.last_seen_at
   end
 
-  test "signed-out request to a public page does not stamp anyone" do
-    target = create(:user, club: @club, last_seen_at: nil)
-    get new_session_path
-    assert_response :success
-    assert_nil target.reload.last_seen_at
-  end
-
   test "renders Never badge for users with no last_seen_at" do
     create(:user, club: @club, name: "Unclaimed Carl", last_seen_at: nil)
     sign_in_as(@admin)

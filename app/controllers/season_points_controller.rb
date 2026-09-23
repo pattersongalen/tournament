@@ -9,6 +9,7 @@ class SeasonPointsController < ApplicationController
     else
       []
     end
+    @club = current_club
   end
 
   def tournaments

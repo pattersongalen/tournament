@@ -4,7 +4,7 @@ require "test_helper"
 class TournamentBingoTest < ActiveSupport::TestCase
   setup { create_bingo_species! }
 
-  def club = Club.create!(name: "Test Club")
+  def club = @club ||= Club.create!(name: "Test Club")
 
   def build_bingo(**attrs)
     Tournament.new(
@@ -63,20 +63,13 @@ class TournamentBingoTest < ActiveSupport::TestCase
                  "the auto-assigned layout must not surface a misleading bingo_layout error"
   end
 
-  test "PERCH_NAME and PIKE_NAME constants exist" do
-    assert_equal "Perch", Species::PERCH_NAME
-    assert_equal "Pike", Species::PIKE_NAME
-  end
+  test "bingo tournament with blind_leaderboard true is invalid, false is valid" do
+    invalid = build_bingo(blind_leaderboard: true)
+    assert_not invalid.valid?
+    assert invalid.errors[:blind_leaderboard].any?
 
-  test "bingo tournament with blind_leaderboard true is invalid" do
-    t = build_bingo(blind_leaderboard: true)
-    assert_not t.valid?
-    assert t.errors[:blind_leaderboard].any?
-  end
-
-  test "bingo tournament with blind_leaderboard false is valid" do
-    t = build_bingo(blind_leaderboard: false)
-    assert t.valid?, t.errors.full_messages.to_sentence
+    valid = build_bingo(blind_leaderboard: false)
+    assert valid.valid?, valid.errors.full_messages.to_sentence
   end
 
   test "bingo is rejected when a referenced species is missing" do

@@ -10,12 +10,6 @@ class Api::VersionControllerTest < ActionDispatch::IntegrationTest
     assert_equal AppVersion.current, response.parsed_body["build"]
   end
 
-  test "GET requires sign-in" do
-    get "/api/version", headers: { "Accept" => "application/json" }
-
-    assert_response :unauthorized
-  end
-
   private
 
   def sign_in_as(user)

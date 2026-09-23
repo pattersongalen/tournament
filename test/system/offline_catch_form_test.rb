@@ -29,48 +29,13 @@ class OfflineCatchFormTest < ApplicationSystemTestCase
     @walleye = create(:species, club: @club, name: "Walleye")
   end
 
-  test "logging a catch on the offline shell enqueues and syncs it" do
-    count_before = Catch.count
-    sign_in_as(@user)
-
-    apply_ios_shims(online: :except_offline_shell, deny_geolocation: true, remove_sync_manager: true)
-
-    visit "/offline"
-    assert_selector "h1", text: "Log Catch"
-
-    find("select#catch_species_id").select("Walleye")
-    fill_in "catch_length_inches", with: "18"
-
-    # Inject a synthetic photo blob the way photo-capture would.
-    page.execute_script <<~JS
-      const el = document.querySelector("[data-controller~='catch-form']");
-      const blob = new Blob([new Uint8Array([0xff,0xd8,0xff,0xe0,0,0,0,0])], { type: "image/jpeg" });
-      el.dispatchEvent(new CustomEvent("photo-capture:captured", { detail: { blob } }));
-    JS
-
-    click_button "Submit"
-
-    catch_record = nil
-    Timeout.timeout(15) do
-      loop do
-        catch_record = Catch.order(:id).last if Catch.count > count_before
-        break if catch_record
-        sleep 0.2
-      end
-    end
-
-    assert catch_record, "expected the offline-logged catch to reach the server"
-    assert_equal @user.id, catch_record.user_id
-    assert_equal "Walleye", catch_record.species.name
-    assert_equal 18, catch_record.length_inches.to_i
-  end
-
   # WebKit's file-backed-blob bug means a photo can become unreadable AFTER
   # it's queued — and by drain time the fish is released and the photo is
   # unrecoverable (the iOS camera-through-web flow never saves to the camera
   # roll). Reading the bytes at submit time moves the failure to the moment
-  # the angler is still holding the fish and can retake the shot.
-  test "an unreadable photo fails at submit time with a retake prompt" do
+  # the angler is still holding the fish and can retake the shot — so the
+  # retake has to be the whole story: refused first, then accepted and synced.
+  test "an unreadable photo is refused at submit time and the retake syncs" do
     count_before = Catch.count
     sign_in_as(@user)
 
@@ -84,18 +49,32 @@ class OfflineCatchFormTest < ApplicationSystemTestCase
 
     # A 0-byte blob stands in for WebKit's unreadable file-backed blob — the
     # same stand-in offline_sync_test uses for the drain-side guard.
-    page.execute_script <<~JS
-      const el = document.querySelector("[data-controller~='catch-form']");
-      const blob = new Blob([], { type: "image/jpeg" });
-      el.dispatchEvent(new CustomEvent("photo-capture:captured", { detail: { blob } }));
-    JS
-
+    capture_photo("new Blob([], { type: 'image/jpeg' })")
     click_button "Submit"
 
-    assert_text(/photo couldn.?t be read.*retake/i, wait: 5)
+    assert page.has_text?(/photo couldn.?t be read.*retake/i, wait: 5),
+           "unreadable photo: the angler must be told to retake it"
     assert_current_path "/offline"
-    assert_equal count_before, Catch.count
+    assert_equal count_before, Catch.count, "unreadable photo: nothing may reach the server"
     assert_equal 0, idb_pending_count, "an unreadable photo must not be enqueued"
+
+    # The retake: a readable photo on the same form must enqueue and sync.
+    capture_photo("new Blob([new Uint8Array([0xff,0xd8,0xff,0xe0,0,0,0,0])], { type: 'image/jpeg' })")
+    click_button "Submit"
+
+    catch_record = nil
+    Timeout.timeout(15) do
+      loop do
+        catch_record = Catch.order(:id).last if Catch.count > count_before
+        break if catch_record
+        sleep 0.2
+      end
+    end
+
+    assert catch_record, "expected the offline-logged catch to reach the server"
+    assert_equal @user.id, catch_record.user_id, "retake: wrong user"
+    assert_equal "Walleye", catch_record.species.name, "retake: wrong species"
+    assert_equal 18, catch_record.length_inches.to_i, "retake: wrong length"
   end
 
   # Regression: navigator.onLine only reports that a network interface is up, not
@@ -104,8 +83,8 @@ class OfflineCatchFormTest < ApplicationSystemTestCase
   # host). The controller used to redirect to "/" on onLine alone; the service
   # worker then re-served this shell for that navigation and it redirected again
   # — an infinite flash loop that locked the user out of the form. The shell must
-  # stay put and interactive until the origin actually answers a request.
-  test "offline shell does not redirect-loop when online but the server is unreachable" do
+  # stay put and interactive until the angler taps the manual return themselves.
+  test "the offline shell never auto-redirects and leaves only on the manual button" do
     sign_in_as(@user)
 
     apply_ios_shims(online: true, extra_js: <<~JS)
@@ -129,29 +108,26 @@ class OfflineCatchFormTest < ApplicationSystemTestCase
     assert_selector "h1", text: "Log Catch"
     # The form is still mounted and interactive — not stuck mid-navigation.
     find("select#catch_species_id").select("Walleye")
-    assert_selector "select#catch_species_id option[selected]", text: "Walleye", visible: :all
-  end
-
-  test "offline shell stays put and offers a manual return instead of auto-redirecting" do
-    sign_in_as(@user)
-
-    visit "/offline"
-
-    # We must still be on the shell (old behavior auto-bounced to "/").
-    assert_selector "h1", text: "Log Catch"
-    assert_current_path "/offline"
+    assert page.has_selector?("select#catch_species_id option[selected]", text: "Walleye", visible: :all),
+           "unreachable server: the form must stay interactive"
+    # Old behavior auto-bounced to "/"; the way out is the angler's own tap.
     assert_button "Back to live app"
-  end
 
-  test "tapping Back to live leaves the offline shell for the live app" do
-    sign_in_as(@user)
-
-    visit "/offline"
     click_button "Back to live app"
 
     # The live page does not carry the back-to-live controller.
     assert_no_selector "[data-controller='back-to-live']"
     assert_no_current_path "/offline"
+  end
+
+  private
+
+  # Injects a photo the way photo-capture would.
+  def capture_photo(blob_js)
+    page.execute_script <<~JS
+      const el = document.querySelector("[data-controller~='catch-form']");
+      el.dispatchEvent(new CustomEvent("photo-capture:captured", { detail: { blob: #{blob_js} } }));
+    JS
   end
 
   # sign_in_as, apply_ios_shims, and idb_pending_count come from IosWebQuirks

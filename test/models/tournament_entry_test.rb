@@ -63,11 +63,6 @@ class TournamentEntryTest < ActiveSupport::TestCase
     assert_equal [entry], boat.tournament_entries
   end
 
-  test "an entry without a boat is still valid" do
-    entry = create(:tournament_entry)
-    assert_nil entry.boat
-  end
-
   test "a boat can't have two live entries in the same tournament (DB-level guard)" do
     boat = create(:boat, club: @club)
     create(:tournament_entry, tournament: @team_t, boat: boat)

@@ -11,31 +11,26 @@ class CatchFormOverLengthTest < ApplicationSystemTestCase
     create(:tournament_entry_member, tournament_entry: entry, user: @user)
   end
 
-  test "Walleye over 50 inches surfaces an inline failure and does not submit" do
+  # Merges the live-typing feedback and the submit-blocked checks into one flow.
+  test "Walleye over 50 inches: live feedback appears while typing, and Submit still won't go through" do
     token = SignInToken.issue!(user: @user)
     visit consume_session_path(token: token.token)
     visit new_catch_path
 
     select "Walleye", from: "Species"
     fill_in "Length (in)", with: "60"
+
+    # No submit click yet -- refresh() runs on input event and writes to status target.
+    assert page.has_text?("can't exceed 50", wait: 5),
+           "typing: the cap message should appear before any submit"
+
     click_button "Submit"
 
     # Cap check fires before the photo check, so we don't need to attach a photo.
-    assert_text "can't exceed 50"
-
+    assert page.has_text?("can't exceed 50", wait: 5),
+           "submit: the cap message should still show"
     # And the form did not navigate away (the Stimulus submit short-circuits).
-    assert_current_path new_catch_path
-  end
-
-  test "Walleye over 50 inches: live feedback appears as the user types" do
-    token = SignInToken.issue!(user: @user)
-    visit consume_session_path(token: token.token)
-    visit new_catch_path
-
-    select "Walleye", from: "Species"
-    fill_in "Length (in)", with: "60"
-
-    # No submit click — refresh() runs on input event and writes to status target.
-    assert_text "can't exceed 50"
+    assert page.has_current_path?(new_catch_path, wait: 5),
+           "submit: the Stimulus submit should short-circuit and not navigate away"
   end
 end

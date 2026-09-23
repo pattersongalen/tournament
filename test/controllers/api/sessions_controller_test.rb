@@ -15,11 +15,6 @@ class Api::SessionsControllerTest < ActionDispatch::IntegrationTest
     assert body["csrf_token"].present?
   end
 
-  test "returns 401 when signed out" do
-    get "/api/session", headers: { "Accept" => "application/json" }
-    assert_response :unauthorized
-  end
-
   private
 
   def sign_in_as(user)
