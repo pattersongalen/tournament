@@ -9,7 +9,10 @@ export default class extends Controller {
   static values = { taggedSpeciesId: String }
 
   toggle(event) {
-    const tagged = event.target.value === this.taggedSpeciesIdValue
+    // Same "is the selected species the tagged one" rule as catch_form_controller:
+    // an empty tagged id (species not seeded) never matches.
+    const tagged = this.taggedSpeciesIdValue !== ""
+                && String(event.target.value) === String(this.taggedSpeciesIdValue)
     const hasTag = this.inputTarget.value.trim() !== ""
     this.wrapperTarget.classList.toggle("hidden", !(tagged || hasTag))
   }

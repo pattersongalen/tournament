@@ -90,20 +90,34 @@ module Catches
           # Only a tagged-format tournament scores the tag, and only its presence:
           # each tagged catch earns one ticket, a blank-tag catch is skipped.
           rebuilt = false
-          if species_changed || (tag_changed && new_tag.nil?)
-            # A new species, or a tag going present -> blank, can make the catch
-            # newly (in)eligible, so rebuild its placements from scratch.
+          if species_changed
+            # A new species can make the catch newly (in)eligible, so rebuild its
+            # placements from scratch. This is also the only way a tag legitimately
+            # goes present -> blank: the model rejects a blank tag on Tagged
+            # Walleye, and a tagged tournament scores nothing else, so clearing a
+            # stray tag on any other species (no species change) can't touch a
+            # placement and deliberately skips the rebuild — on an append-only
+            # format like Fish Train a needless rebuild would leave a permanent
+            # hole and re-append the fish out of capture order.
             deactivate_and_replace!
             rebuilt = true
-          elsif tag_changed && prior_tag.nil?
-            # blank -> present: the catch may now qualify for a tagged tournament
-            # that skipped it. PlaceInSlots no-ops where it already holds a
-            # placement, so existing tickets and baskets are untouched.
-            lock_entries!(reachable_entry_ids)
-            ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club)
+          elsif tag_changed && prior_tag.nil? && @catch.species.tagged_walleye?
+            # blank -> present on a Tagged Walleye: the catch may now qualify for
+            # a tagged tournament that skipped it. Re-place into ONLY those
+            # tournaments — a full PlaceInSlots run would also revisit every
+            # non-tagged tournament the catch is eligible for, and on an
+            # append-only format that re-appends a legitimately bumped fish as a
+            # fresh arrival. Existing tickets are untouched (PlaceInSlots no-ops
+            # where the catch already holds an active placement).
+            tagged_rows = reachable_rows.select { |r| r[:tournament].format_tagged? }
+            lock_entries!(tagged_rows.map { |r| r[:entry].id })
+            tagged_rows.each do |r|
+              ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, tournament: r[:tournament])
+            end
           end
           # present -> present (a typo fix) changes no placement: the ticket a
-          # drawn winner rests on stays the same row.
+          # drawn winner rests on stays the same row. A tag added to or cleared
+          # from a non-Tagged-Walleye catch is bookkeeping only.
 
           if @slot_index && @entry_id
             # A forced slot is only durable/meaningful on slot-based formats. On a
@@ -274,9 +288,16 @@ module Catches
     # occupies, or a concurrent PlaceInSlots could grab an intermediate id we
     # later need while holding one we're waiting on.
     def reachable_entry_ids
-      ::Tournaments::ActiveForUser
-        .with_entries(user: @catch.user, at: @catch.captured_at_device)
-        .map { |row| row[:entry].id }
+      reachable_rows.map { |row| row[:entry].id }
+    end
+
+    # [{ tournament:, entry: }] rows PlaceInSlots would iterate for this catch,
+    # narrowed to the editing club when one is set (mirrors PlaceInSlots' own
+    # club filter so a per-club edit never places into another club's event).
+    def reachable_rows
+      rows = ::Tournaments::ActiveForUser.with_entries(user: @catch.user, at: @catch.captured_at_device)
+      rows = rows.select { |r| r[:tournament].club_id == @club.id } if @club
+      rows
     end
 
     # Drop the catch's active placements, promote backups into the freed slots,

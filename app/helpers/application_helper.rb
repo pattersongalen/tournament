@@ -6,6 +6,13 @@ module ApplicationHelper
     @ordered_species ||= Species.order(:name).to_a
   end
 
+  # Id of the Tagged Walleye species (nil when it isn't seeded), for the catch
+  # forms' show-the-tag-field-only-on-Tagged-Walleye toggle. Pass an already
+  # loaded species list to avoid a second query.
+  def tagged_species_id(species = ordered_species)
+    species.find(&:tagged_walleye?)&.id
+  end
+
   def tournament_window(tournament)
     starts_at = tournament.starts_at
     ends_at   = tournament.ends_at

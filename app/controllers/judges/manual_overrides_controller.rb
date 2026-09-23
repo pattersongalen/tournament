@@ -13,6 +13,7 @@ class Judges::ManualOverridesController < Judges::BaseController
       length_inches: resolved_length_inches(@catch),
       length_unit: resolved_length_unit,
       species_id: params[:species_id].presence&.to_i,
+      tag_number: params[:tag_number],
       slot_index: params[:slot_index].presence&.to_i,
       entry_id: params[:entry_id].presence&.to_i,
       # A judge is assigned to a specific tournament; confine reconcile and

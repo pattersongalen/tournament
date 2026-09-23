@@ -123,6 +123,24 @@ class Judges::ManualOverridesControllerTest < ActionDispatch::IntegrationTest
     }.each { |_label, block| block.call }
   end
 
+  test "POST with tag_number rewrites the science tag" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    @catch.update!(species: tagged, tag_number: "X1795\u201d")
+    post judges_tournament_catch_manual_override_path(tournament_id: @t.id, catch_id: @catch.id),
+         params: { species_id: tagged.id, tag_number: " x1795 ", note: "typo" }
+    assert_equal "X1795", @catch.reload.tag_number
+  end
+
+  test "GET new shows the tag field for a Tagged Walleye and hides it on a plain untagged catch" do
+    get new_judges_tournament_catch_manual_override_path(tournament_id: @t.id, catch_id: @catch.id)
+    assert_select "[data-tag-field-target='wrapper'].hidden input[name='tag_number']"
+
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    @catch.update!(species: tagged, tag_number: "A1")
+    get new_judges_tournament_catch_manual_override_path(tournament_id: @t.id, catch_id: @catch.id)
+    assert_select "[data-tag-field-target='wrapper']:not(.hidden) input[name='tag_number'][value='A1']"
+  end
+
   test "POST with species_id changes the catch's species" do
     post judges_tournament_catch_manual_override_path(tournament_id: @t.id, catch_id: @catch.id),
          params: { species_id: @pike.id, note: "misidentified" }

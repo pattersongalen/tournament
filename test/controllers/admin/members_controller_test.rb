@@ -325,8 +325,12 @@ class Admin::MembersControllerTest < ActionDispatch::IntegrationTest
     end
   end
   test "index counts each member's tournament entries with one grouped query" do
+    # Season-points nights, so the Main-nights count (COUNT(DISTINCT ...) over the
+    # same join) also runs and the entries-count assertion below has to tell the
+    # two grouped counts apart rather than passing because only one exists.
     2.times do |i|
-      t = create(:tournament, club: @club, starts_at: (i + 1).weeks.ago, ends_at: (i + 1).weeks.ago + 3.hours)
+      t = create(:tournament, club: @club, awards_season_points: true, season_tag: "Wed 2026",
+                 starts_at: (i + 1).weeks.ago, ends_at: (i + 1).weeks.ago + 3.hours)
       entry = create(:tournament_entry, tournament: t)
       create(:tournament_entry_member, tournament_entry: entry, user: @member)
     end
@@ -334,12 +338,16 @@ class Admin::MembersControllerTest < ActionDispatch::IntegrationTest
     sign_in_as(@organizer)
     queries = []
     counter = ->(_name, _start, _finish, _id, payload) do
-      queries << payload[:sql] if payload[:sql] =~ /tournament_entry_members/i && payload[:sql] =~ /COUNT/i
+      sql = payload[:sql]
+      # The entries count is COUNT(*) over tournament_entry_members; the Main-nights
+      # count is COUNT(DISTINCT tournament_id) and is not what this test measures.
+      queries << sql if sql =~ /tournament_entry_members/i && sql =~ /COUNT\(\*\)/i
     end
     ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { get admin_members_path }
     assert_response :success
     assert_select "tr", text: /Old Name/ do
       assert_select "td[data-role='entries']", text: "2"
+      assert_select "td[data-role='main-nights']", text: "2"
     end
     assert_equal 1, queries.size, "expected one grouped entry count, got:\n#{queries.join("\n")}"
   end

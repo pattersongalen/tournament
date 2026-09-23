@@ -12,8 +12,12 @@
           <span class="text-sm text-amber-400">— deactivated</span>
         <% end %>
         <span class="text-sm text-slate-400">— <%= u.email %></span>
-        <div class="text-sm text-slate-400" data-role="main-nights">
-          <%= pluralize(@main_nights.fetch(u.id, 0), "league night") %> this season<%= " (#{@season_tag})" if @season_tag %>
+        <%# Mains only (Sides don't award points), counted from kickoff rather
+            than from the end of the night — same definition as the admin
+            table's "Main nights" column and its tooltip. %>
+        <div class="text-sm text-slate-400" data-role="main-nights"
+             title="League-night Mains entered this season, counted from the start of the night">
+          <%= pluralize(@main_nights.fetch(u.id, 0), "Main night") %> this season<%= " (#{@season_tag})" if @season_tag %>
         </div>
       </div>
       <div class="flex items-center gap-2">

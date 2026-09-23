@@ -1182,6 +1182,94 @@ module Catches
       assert_equal 1, CatchPlacement.where(catch: fish).count
     end
 
+    # Fish Train [Walleye, Pike, Walleye]: three single-car groups, so a catch that
+    # is neither the current group's nor the next group's species is skipped, and
+    # a re-placed catch lands in the NEXT group rather than back where it was.
+    def walleye_pike_walleye_train(first_species: @walleye)
+      ft = build(:tournament, club: @club, format: :fish_train, mode: :solo,
+                 starts_at: 1.hour.ago, ends_at: 1.hour.from_now,
+                 train_cars: [first_species.id, @pike.id, first_species.id])
+      ft.scoring_slots.build(species: first_species, slot_count: 1)
+      ft.scoring_slots.build(species: @pike, slot_count: 1)
+      ft.save!
+      entry = create(:tournament_entry, tournament: ft)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      ft
+    end
+
+    def active_train(ft)
+      ft.catch_placements.active.order(:slot_index).pluck(:catch_id, :slot_index)
+    end
+
+    test "manual_override clearing a stray tag on a non-Tagged-Walleye catch leaves the train alone" do
+      ft = walleye_pike_walleye_train
+      car0 = create(:catch, user: @user, species: @walleye, length_inches: 12, tag_number: "A1",
+                    captured_at_device: 30.minutes.ago)
+      Catches::PlaceInSlots.call(catch: car0)
+      car1 = create(:catch, user: @user, species: @pike, length_inches: 20, captured_at_device: 25.minutes.ago)
+      Catches::PlaceInSlots.call(catch: car1)
+      assert_equal [[car0.id, 0], [car1.id, 1]], active_train(ft)
+      before_ids = ft.catch_placements.pluck(:id).sort
+
+      ApplyJudgeAction.call(tournament: nil, catch: car0, judge: @judge, action: :manual_override,
+                            tag_number: "", note: "stray tag", club: @club)
+
+      assert_nil car0.reload.tag_number
+      # A rebuild would deactivate car 0 (a permanent hole on this append-only
+      # format) and re-append the walleye at car 2 as the "next group" species.
+      assert_equal [[car0.id, 0], [car1.id, 1]], active_train(ft)
+      assert_equal before_ids, ft.catch_placements.pluck(:id).sort, "no placement rows rewritten"
+    end
+
+    test "manual_override adding a stray tag to a non-Tagged-Walleye catch does not re-place a bumped fish" do
+      ft = walleye_pike_walleye_train
+      small = create(:catch, user: @user, species: @walleye, length_inches: 12, captured_at_device: 30.minutes.ago)
+      Catches::PlaceInSlots.call(catch: small)
+      big = create(:catch, user: @user, species: @walleye, length_inches: 13, captured_at_device: 25.minutes.ago)
+      Catches::PlaceInSlots.call(catch: big)
+      pike = create(:catch, user: @user, species: @pike, length_inches: 20, captured_at_device: 20.minutes.ago)
+      Catches::PlaceInSlots.call(catch: pike)
+      assert_equal [[big.id, 0], [pike.id, 1]], active_train(ft), "the 13\" bumped the 12\" out of car 0"
+
+      ApplyJudgeAction.call(tournament: nil, catch: small, judge: @judge, action: :manual_override,
+                            tag_number: "B7", note: "tag noted late", club: @club)
+
+      assert_equal "B7", small.reload.tag_number
+      # A full PlaceInSlots re-run would see the bumped walleye as a fresh arrival
+      # and append it at car 2, out of capture order.
+      assert_equal [[big.id, 0], [pike.id, 1]], active_train(ft)
+    end
+
+    test "manual_override adding a tag re-places only into tagged tournaments" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      ft = walleye_pike_walleye_train(first_species: tagged)
+      tt = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                 starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      tt.scoring_slots.build(species: tagged, slot_count: 1)
+      tt.save!
+      tt_entry = create(:tournament_entry, tournament: tt)
+      create(:tournament_entry_member, tournament_entry: tt_entry, user: @user)
+
+      stranded = create(:catch, user: @user, species: tagged, length_inches: 12, tag_number: "TMP",
+                        captured_at_device: 30.minutes.ago)
+      stranded.update_column(:tag_number, nil)
+      Catches::PlaceInSlots.call(catch: stranded)
+      ticketed = create(:catch, user: @user, species: tagged, length_inches: 13, tag_number: "A2",
+                        captured_at_device: 25.minutes.ago)
+      Catches::PlaceInSlots.call(catch: ticketed)
+      pike = create(:catch, user: @user, species: @pike, length_inches: 20, captured_at_device: 20.minutes.ago)
+      Catches::PlaceInSlots.call(catch: pike)
+      assert_equal [[ticketed.id, 0], [pike.id, 1]], active_train(ft), "the 13\" bumped the stranded 12\""
+      assert_equal 0, CatchPlacement.where(tournament: tt, catch: stranded, active: true).count, "blank tag: no ticket"
+
+      ApplyJudgeAction.call(tournament: nil, catch: stranded, judge: @judge, action: :manual_override,
+                            tag_number: "A1", note: "tag found in the photo", club: @club)
+
+      assert_equal 1, CatchPlacement.where(tournament: tt, catch: stranded, active: true).count, "now ticketed"
+      assert_equal [[ticketed.id, 0], [pike.id, 1]], active_train(ft),
+                   "the tag add must not re-append the bumped fish to the train"
+    end
+
     test "manual_override tag added together with a length change places the catch at the new length" do
       tagged = Species.find_or_create_by!(name: "Tagged Walleye")
       t = build(:tournament, club: @club, format: :tagged, mode: :solo,

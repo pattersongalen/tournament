@@ -235,6 +235,13 @@ class CatchTest < ActiveSupport::TestCase
                  "disqualification_note should read the preloaded association, not re-query per row"
   end
 
+  test "a whitespace-only tag_number is stored as nil, not spaces" do
+    user = create(:user)
+    plain = create(:species, name: "Perch")
+    c = create(:catch, user: user, species: plain, tag_number: "   ", length_inches: 10.0)
+    assert_nil c.reload.tag_number
+  end
+
   test "tag_number is upcased, required for Tagged Walleye, and length checked" do
     user = create(:user)
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")

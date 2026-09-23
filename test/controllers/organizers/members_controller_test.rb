@@ -137,7 +137,7 @@ class Organizers::MembersControllerTest < ActionDispatch::IntegrationTest
     get organizers_members_path
     assert_response :success
     assert_select "li", text: /Regular Ralph/ do
-      assert_select "[data-role='main-nights']", text: /1 league night/
+      assert_select "[data-role='main-nights']", text: /1 Main night/
     end
   end
 end

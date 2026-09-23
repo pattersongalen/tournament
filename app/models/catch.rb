@@ -128,8 +128,6 @@ class Catch < ApplicationRecord
     judge_actions.select(&:disqualify?).max_by { |a| [a.created_at, a.id] }&.note
   end
 
-  private
-
   # The stored form of a science tag: trimmed, upcased, blank -> nil. Public so
   # editors can tell whether a submitted tag actually differs from the stored one
   # before saving (and so the rule lives in exactly one place).
@@ -137,8 +135,19 @@ class Catch < ApplicationRecord
     value.to_s.strip.upcase.presence
   end
 
+  # Max length (inches) for a species, or nil if the species is unbounded.
+  # Single source of truth for the cap lookup (validation, controller, views).
+  def self.length_cap_for(species)
+    return nil if species.nil?
+    MAX_LENGTH_BY_SPECIES[species.name.to_s.downcase]
+  end
+
+  private
+
+  # Unconditional so a whitespace-only tag lands as nil (the form the editor's
+  # changed-tag comparison assumes), not as a string of spaces.
   def normalize_tag_number
-    self.tag_number = self.class.normalize_tag(tag_number) if tag_number.present?
+    self.tag_number = self.class.normalize_tag(tag_number)
   end
 
   def default_length_unit
@@ -202,13 +211,6 @@ class Catch < ApplicationRecord
     if video.byte_size.to_i > VIDEO_MAX_BYTES
       errors.add(:video, "is larger than #{VIDEO_MAX_BYTES / 1.megabyte}MB")
     end
-  end
-
-  # Max length (inches) for a species, or nil if the species is unbounded.
-  # Single source of truth for the cap lookup (validation, controller, views).
-  def self.length_cap_for(species)
-    return nil if species.nil?
-    MAX_LENGTH_BY_SPECIES[species.name.to_s.downcase]
   end
 
   def length_within_species_cap

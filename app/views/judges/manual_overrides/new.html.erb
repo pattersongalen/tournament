@@ -1,5 +1,6 @@
 <h2>Manual override</h2>
-<%= form_with url: judges_tournament_catch_manual_override_path(tournament_id: @tournament.id, catch_id: @catch.id), local: true, data: { controller: "length-edit" } do |f| %>
+<%= form_with url: judges_tournament_catch_manual_override_path(tournament_id: @tournament.id, catch_id: @catch.id), local: true,
+              data: { controller: "length-edit tag-field", tag_field_tagged_species_id_value: tagged_species_id } do |f| %>
   <%
     # Seed the unit toggle from the catch's own logged unit (not the viewing
     # judge's preference) so an untouched length round-trips to the same stored
@@ -12,9 +13,13 @@
     prefill = unit == "centimeters" ? display_cm(@catch.length_inches, unit) : @catch.length_inches
     step    = 0.25
     species_options = ordered_species.map { |s| [s.name, s.id] }
+    # Same rule as the organizer editor: the tag only scores on Tagged Walleye,
+    # so show the field there and on a catch already carrying a (stray) tag.
+    show_tag = @catch.species.tagged_walleye? || @catch.tag_number.present?
   %>
   <%= label_tag :species_id, "Species" %>
-  <%= select_tag :species_id, options_for_select(species_options, @catch.species_id) %>
+  <%= select_tag :species_id, options_for_select(species_options, @catch.species_id),
+                 data: { action: "change->tag-field#toggle" } %>
 
   <%= label_tag :length, "Override length" %>
   <%= number_field_tag :length, prefill, step: step,
@@ -25,6 +30,13 @@
       <%= u == "inches" ? "Inches" : "Centimeters" %>
     </label>
   <% end %>
+
+  <div data-tag-field-target="wrapper" class="<%= 'hidden' unless show_tag %>">
+    <%= label_tag :tag_number, "Science tag # (Tagged Walleye)" %>
+    <%= text_field_tag :tag_number, @catch.tag_number, maxlength: 16, autocomplete: "off",
+                       autocapitalize: "characters", spellcheck: false,
+                       data: { "tag-field-target": "input" } %>
+  </div>
 
   <% if @tournament.supports_forced_slot? %>
     <%# Forcing a catch into a specific slot only makes sense on slot-based
