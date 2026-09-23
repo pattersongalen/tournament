@@ -235,13 +235,23 @@ class CatchTest < ActiveSupport::TestCase
                  "disqualification_note should read the preloaded association, not re-query per row"
   end
 
-  test "tag_number is upcased, required for Tagged Walleye, and format/length checked" do
+  test "tag_number is upcased, required for Tagged Walleye, and length checked" do
     user = create(:user)
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")
 
     normalized = build(:catch, user: user, species: tagged, tag_number: "a1234", length_inches: 18.0)
     normalized.valid?
     assert_equal "A1234", normalized.tag_number, "tag numbers are upcased before validation"
+
+    # Real tags get typed on a boat: smart quotes from an inch mark, spaces,
+    # punctuation. A rejected tag strands the queued catch on the phone (the
+    # 2026-09-12 stuck-walleye incident), so any text is accepted and fixed
+    # up later by an organizer rather than bounced at sync time.
+    ["X1795\u201D", "abc 123!", "A/B.C"].each do |tag|
+      loose = build(:catch, user: user, species: tagged, tag_number: tag, length_inches: 18.0)
+      assert loose.valid?, "tag_number #{tag.inspect} should be accepted: #{loose.errors.full_messages.to_sentence}"
+      assert_equal tag.strip.upcase, loose.tag_number
+    end
 
     untagged_species = create(:species, name: "Walleye Test #{SecureRandom.hex(2)}")
     optional = build(:catch, user: user, species: untagged_species, tag_number: nil, length_inches: 18.0)
@@ -250,7 +260,6 @@ class CatchTest < ActiveSupport::TestCase
 
     {
       nil => "is required for Tagged Walleye catches",
-      "abc 123!" => "may only contain letters, numbers, and dashes",
       "A" * 17 => nil # over the 16-char max; the message names the limit
     }.each do |tag, message|
       c = build(:catch, user: user, species: tagged, tag_number: tag, length_inches: 18.0)

@@ -98,15 +98,15 @@ class Catch < ApplicationRecord
   validate :length_within_species_cap
   validates :note, length: { maximum: 500 }, allow_blank: true
 
-  TAG_NUMBER_FORMAT = /\A[A-Z0-9-]+\z/.freeze
-
+  # No character-set rule on purpose: tags get typed on a boat, and a stray
+  # smart quote or space used to 422 the upload and strand the queued catch on
+  # the phone with no way to edit it (2026-09-12 stuck tagged walleye). Accept
+  # whatever was typed (upcased, trimmed, capped at the 16-char column) and let
+  # an organizer correct the odd typo afterwards.
   before_validation :normalize_tag_number
   before_validation :default_length_unit
   validate :tag_number_required_for_tagged_walleye
-  validates :tag_number,
-            format: { with: TAG_NUMBER_FORMAT, message: "may only contain letters, numbers, and dashes" },
-            length: { maximum: 16 },
-            allow_blank: true
+  validates :tag_number, length: { maximum: 16 }, allow_blank: true
 
   before_validation :normalize_weight_text
   validates :weight_text, length: { maximum: 32 }, allow_blank: true
