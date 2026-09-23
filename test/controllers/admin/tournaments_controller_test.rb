@@ -92,4 +92,15 @@ class Admin::TournamentsControllerTest < ActionDispatch::IntegrationTest
     token = SignInToken.issue!(user: user)
     get consume_session_path(token: token.token)
   end
+
+  test "a linked tournament's edit page links to the partner's edit page" do
+    main = create(:tournament, club: @club, mode: :team, name: "Main",
+                  starts_at: 1.hour.from_now, ends_at: 4.hours.from_now)
+    side = create(:tournament, club: @club, mode: :team, name: "Side",
+                  starts_at: 1.hour.from_now, ends_at: 4.hours.from_now)
+    TournamentLinks::Join.call(tournament: main, other: side)
+    get edit_admin_tournament_path(main)
+    assert_response :success
+    assert_select "a[href=?]", edit_admin_tournament_path(side), text: /Side/
+  end
 end

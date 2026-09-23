@@ -126,4 +126,18 @@ class Organizers::MembersControllerTest < ActionDispatch::IntegrationTest
     token = SignInToken.issue!(user: user)
     get consume_session_path(token: token.token)
   end
+
+  test "index shows each member's league-night Main count for the current season" do
+    member = create(:user, club: @club, role: :member, name: "Regular Ralph")
+    night = create(:tournament, club: @club, mode: :team, awards_season_points: true, season_tag: "Wed 2026",
+                                starts_at: 1.week.ago, ends_at: 1.week.ago + 3.hours)
+    entry = create(:tournament_entry, tournament: night)
+    create(:tournament_entry_member, tournament_entry: entry, user: member)
+
+    get organizers_members_path
+    assert_response :success
+    assert_select "li", text: /Regular Ralph/ do
+      assert_select "[data-role='main-nights']", text: /1 league night/
+    end
+  end
 end

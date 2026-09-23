@@ -2,12 +2,16 @@
 <% linked = @tournament.linked_tournaments %>
 <% if linked.any? %>
   <% linked.each do |other| %>
-    <div class="bg-slate-800 rounded-lg p-3 mb-2">
-      <div class="font-semibold text-slate-100"><%= other.name %></div>
+    <%= link_to edit_admin_tournament_path(other),
+                class: "block bg-slate-800 hover:bg-slate-700 active:bg-slate-700 rounded-lg p-3 mb-2" do %>
+      <div class="flex items-center justify-between gap-3">
+        <div class="font-semibold text-slate-100"><%= other.name %></div>
+        <span class="text-sm text-blue-400 whitespace-nowrap">Edit &rarr;</span>
+      </div>
       <p class="text-sm text-slate-400 mt-1">
         Entries are shared. Adding a boat here adds it there.
       </p>
-    </div>
+    <% end %>
   <% end %>
   <%= button_to "Unlink", link_admin_tournament_path(@tournament),
                 method: :delete,

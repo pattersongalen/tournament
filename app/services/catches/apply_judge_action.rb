@@ -5,20 +5,22 @@ module Catches
     class ForceSlotUnsupported < StandardError; end
 
     def self.call(tournament:, catch:, judge:, action:, note: nil,
-                  length_inches: nil, length_unit: nil, species_id: nil, slot_index: nil, entry_id: nil,
+                  length_inches: nil, length_unit: nil, species_id: nil, tag_number: nil,
+                  slot_index: nil, entry_id: nil,
                   photo: nil, override_in_lake: nil, override_in_sask: nil, latitude: nil, longitude: nil,
                   club: nil)
       new(tournament: tournament, catch: catch, judge: judge, action: action, note: note,
           length_inches: length_inches, length_unit: length_unit, species_id: species_id,
-          slot_index: slot_index, entry_id: entry_id, photo: photo,
+          tag_number: tag_number, slot_index: slot_index, entry_id: entry_id, photo: photo,
           override_in_lake: override_in_lake, override_in_sask: override_in_sask,
           latitude: latitude, longitude: longitude, club: club).call
     end
 
-    def initialize(tournament:, catch:, judge:, action:, note:, length_inches:, length_unit:, species_id:, slot_index:, entry_id:, photo:, override_in_lake:, override_in_sask:, latitude:, longitude:, club: nil)
+    def initialize(tournament:, catch:, judge:, action:, note:, length_inches:, length_unit:, species_id:, slot_index:, entry_id:, photo:, override_in_lake:, override_in_sask:, latitude:, longitude:, tag_number: nil, club: nil)
       @tournament, @catch, @judge, @action, @note = tournament, catch, judge, action.to_sym, note
       @length_inches, @length_unit = length_inches, length_unit
       @species_id, @slot_index, @entry_id = species_id, slot_index, entry_id
+      @tag_number = tag_number
       @photo = photo
       @override_in_lake, @override_in_sask = override_in_lake, override_in_sask
       @latitude, @longitude = latitude, longitude
@@ -70,6 +72,19 @@ module Catches
             @notify_owner = true
           end
 
+          # Science tag. nil means "not on this form" and leaves the tag alone;
+          # a submitted value (blank included) is compared against the stored
+          # tag after the same trim/upcase the model applies, so re-saving an
+          # unchanged tag is a no-op. Tagged tournaments skip a blank-tag catch
+          # at placement time, so a tag change rebuilds placements — that is
+          # what lets a stranded catch reach the draw once its tag is filled in.
+          tag_changed = !@tag_number.nil? &&
+                        @tag_number.to_s.strip.upcase.presence != @catch.tag_number.presence
+          if tag_changed
+            @catch.update!(tag_number: @tag_number.presence)
+            @notify_owner = true
+          end
+
           if species_changed
             @notify_owner = true
             # Update species first, then rebuild placements from scratch so
@@ -79,6 +94,8 @@ module Catches
             # equivalent — and PlaceInSlots only places where the user has an
             # entry at captured_at_device and a slot exists for the new species.
             @catch.update!(species_id: @species_id)
+            deactivate_and_replace!
+          elsif tag_changed
             deactivate_and_replace!
           end
 
@@ -282,6 +299,7 @@ module Catches
         "length_unit"       => @catch.length_unit,
         "species_id"        => @catch.species_id,
         "species_name"      => @catch.species&.name,
+        "tag_number"        => @catch.tag_number,
         "active_placements" => @catch.catch_placements.where(active: true).pluck(:tournament_entry_id, :slot_index),
         "photo_attached"    => @catch.photo.attached?,
         "reference_photo_attached" => @catch.reference_photo.attached?,

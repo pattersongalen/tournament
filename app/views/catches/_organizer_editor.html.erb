@@ -22,7 +22,7 @@
   </div>
 </div>
 
-<h2 class="text-lg font-semibold mb-2">Edit species &amp; length</h2>
+<h2 class="text-lg font-semibold mb-2">Edit species, length &amp; tag</h2>
 <%= form_with url: url_for(action: :update, id: catch_record.id), method: :patch,
               local: true, data: { controller: "length-edit" } do %>
   <%= label_tag :species_id, "Species", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
@@ -47,6 +47,11 @@
       </label>
     <% end %>
   </div>
+
+  <%= label_tag :tag_number, "Science tag # (Tagged Walleye)", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
+  <%= text_field_tag :tag_number, catch_record.tag_number, maxlength: 16, autocomplete: "off",
+                     autocapitalize: "characters", spellcheck: false,
+                     class: "w-full h-12 px-3 rounded-lg bg-slate-800 border border-slate-700 text-base text-slate-100 font-mono uppercase" %>
 
   <%= label_tag :note, "Note (optional)", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
   <%= text_area_tag :note, nil, rows: 3,

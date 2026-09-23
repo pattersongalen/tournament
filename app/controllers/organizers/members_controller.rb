@@ -5,6 +5,8 @@ class Organizers::MembersController < Organizers::BaseController
 
   def index
     @users = current_club.members.includes(:club_memberships).order(:deactivated_at, :name)
+    @season_tag = SeasonPoints::CurrentSeasonTag.call(club: current_club)
+    @main_nights = SeasonPoints::ParticipationCounts.call(club: current_club, season_tag: @season_tag)
   end
 
   def new

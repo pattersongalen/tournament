@@ -80,4 +80,11 @@ class Organizers::TournamentLinksControllerTest < ActionDispatch::IntegrationTes
     token = SignInToken.issue!(user: user)
     get consume_session_path(token: token.token)
   end
+
+  test "a linked tournament's edit page links to the partner's edit page" do
+    TournamentLinks::Join.call(tournament: @main, other: @side)
+    get edit_organizers_tournament_path(@main)
+    assert_response :success
+    assert_select "a[href=?]", edit_organizers_tournament_path(@side), text: /Side/
+  end
 end

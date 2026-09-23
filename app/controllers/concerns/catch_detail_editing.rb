@@ -32,6 +32,7 @@ module CatchDetailEditing
       length_inches: resolved_length_inches(@catch),
       length_unit: resolved_length_unit,
       species_id: params[:species_id].presence&.to_i,
+      tag_number: params[:tag_number],
       club: current_club
     )
     redirect_to url_for(action: :show, id: @catch.id), notice: "Catch updated."

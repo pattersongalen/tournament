@@ -143,4 +143,35 @@ class Organizers::CatchesControllerTest < ActionDispatch::IntegrationTest
     token = SignInToken.issue!(user: user)
     get consume_session_path(token: token.token)
   end
+
+  test "organizer can correct a Tagged Walleye science tag" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    fish = create(:catch, user: @member, species: tagged, length_inches: 18.0, tag_number: "X1795\u201d")
+    sign_in_as(@organizer)
+    patch organizers_catch_path(fish.id), params: {
+      species_id: tagged.id, length: "18", length_unit: "inches", tag_number: "X1795", note: "typo"
+    }
+    assert_redirected_to organizers_catch_path(fish.id)
+    assert_equal "X1795", fish.reload.tag_number
+  end
+
+  test "edit form shows the current science tag" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    fish = create(:catch, user: @member, species: tagged, length_inches: 18.0, tag_number: "A0042")
+    sign_in_as(@organizer)
+    get organizers_catch_path(fish.id)
+    assert_select "input[name=tag_number][value=A0042]"
+  end
+
+  test "blanking the tag on a Tagged Walleye redirects with the validation message" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    fish = create(:catch, user: @member, species: tagged, length_inches: 18.0, tag_number: "A0042")
+    sign_in_as(@organizer)
+    patch organizers_catch_path(fish.id), params: {
+      species_id: tagged.id, length: "18", length_unit: "inches", tag_number: "", note: ""
+    }
+    assert_redirected_to organizers_catch_path(fish.id)
+    assert_match(/required for Tagged Walleye/, flash[:alert])
+    assert_equal "A0042", fish.reload.tag_number
+  end
 end

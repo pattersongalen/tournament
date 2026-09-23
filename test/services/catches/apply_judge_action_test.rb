@@ -1100,5 +1100,43 @@ module Catches
       lens = entry.catch_placements.where(active: true).includes(:catch).map { |p| p.catch.length_inches.to_i }.sort
       assert_equal [17, 18, 19, 20, 30], lens, "the grown backup enters as the over; the 16 drops"
     end
+
+    test "manual_override tag_number rewrites the science tag and records it in the audit row" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0, tag_number: "X1795\u201d")
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: " x1795 ", note: "typo", club: @club)
+      assert_equal "X1795", fish.reload.tag_number
+      audit = JudgeAction.where(catch_id: fish.id).order(:created_at).last
+      assert_equal "X1795\u201d", audit.before_state["tag_number"]
+      assert_equal "X1795", audit.after_state["tag_number"]
+    end
+
+    test "manual_override tag_number places a Tagged Walleye that was stranded by a blank tag" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                    tag_number: "TMP", captured_at_device: 30.minutes.ago)
+      fish.update_column(:tag_number, nil)
+      Catches::PlaceInSlots.call(catch: fish)
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: "A0042", note: "tag added", club: @club)
+      assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+    end
+
+    test "manual_override with an unchanged tag_number leaves the tag alone" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0, tag_number: "A0001")
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: "a0001", note: "no change", club: @club)
+      assert_equal "A0001", fish.reload.tag_number
+    end
   end
 end
