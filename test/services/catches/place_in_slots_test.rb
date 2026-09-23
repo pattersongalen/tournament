@@ -1163,5 +1163,27 @@ module Catches
                  "scoped call must not place into the other overlapping tournament"
   end
 
+  test "tournaments: scope places into exactly the listed tournaments" do
+    other = create(:tournament, club: @club, starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+    create(:scoring_slot, tournament: other, species: @walleye, slot_count: 2)
+    other_entry = create(:tournament_entry, tournament: other)
+    create(:tournament_entry_member, tournament_entry: other_entry, user: @user)
+    third = create(:tournament, club: @club, starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+    create(:scoring_slot, tournament: third, species: @walleye, slot_count: 2)
+    third_entry = create(:tournament_entry, tournament: third)
+    create(:tournament_entry_member, tournament_entry: third_entry, user: @user)
+
+    catch_record = create(:catch, user: @user, species: @walleye, length_inches: 20)
+    PlaceInSlots.call(catch: catch_record, tournaments: [@tournament, third])
+
+    assert_equal [@tournament.id, third.id].sort, catch_record.catch_placements.pluck(:tournament_id).sort
+  end
+
+  test "tournaments: with an empty list places nowhere" do
+    catch_record = create(:catch, user: @user, species: @walleye, length_inches: 20)
+    PlaceInSlots.call(catch: catch_record, tournaments: [])
+    assert_equal 0, catch_record.catch_placements.count
+  end
+
   end
 end

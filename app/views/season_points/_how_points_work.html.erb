@@ -15,7 +15,7 @@
       </thead>
       <tbody>
         <% Club.season_points_bands.each do |band| %>
-          <% scale = Tournaments::PointsScale.call(club: club, entry_count: club.season_points_min_entries, angler_count: band[:sample]) %>
+          <% scale = Tournaments::PointsScale.ladder_for(club: club, angler_count: band[:sample]) %>
           <tr class="border-t border-slate-700">
             <td class="px-2 py-1"><%= band[:label] %></td>
             <td class="px-2 py-1 font-mono">

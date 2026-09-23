@@ -78,5 +78,22 @@ module Tournaments
       assert_equal [9.0, 6.0, 3.0], scale
       assert(scale.all? { |amount| amount.is_a?(Numeric) })
     end
+
+    # The explainer / admin preview tables show one ladder per angler band
+    # with no field to gate on, so they need the band lookup without the
+    # minimum-entries check that .call applies.
+    test "ladder_for returns the band ladder with no minimum-entries gate" do
+      assert_equal [3, 2, 1], PointsScale.ladder_for(club: @club, angler_count: 9)
+      assert_equal [6, 4, 2], PointsScale.ladder_for(club: @club, angler_count: 19)
+      assert_equal [9, 6, 3], PointsScale.ladder_for(club: @club, angler_count: 30)
+
+      @club.update!(season_points_scheme: :base_ladder, season_points_tier_multipliers: [1, 1.5, 2, 2.5])
+      assert_equal [4.5, 3.0, 1.5], PointsScale.ladder_for(club: @club, angler_count: 12)
+    end
+
+    test "ladder_for is nil under full_field, whose ladder is sized by entries" do
+      @club.update!(season_points_scheme: :full_field)
+      assert_nil PointsScale.ladder_for(club: @club, angler_count: 17)
+    end
   end
 end

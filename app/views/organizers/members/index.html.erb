@@ -14,11 +14,15 @@
         <span class="text-sm text-slate-400">— <%= u.email %></span>
         <%# Mains only (Sides don't award points), counted from kickoff rather
             than from the end of the night — same definition as the admin
-            table's "Main nights" column and its tooltip. %>
-        <div class="text-sm text-slate-400" data-role="main-nights"
-             title="League-night Mains entered this season, counted from the start of the night">
-          <%= pluralize(@main_nights.fetch(u.id, 0), "Main night") %> this season<%= " (#{@season_tag})" if @season_tag %>
-        </div>
+            table's "Main nights" column and its tooltip. Hidden when the club
+            has no season at all: a "0 Main nights" line would read as a real
+            zero rather than "nothing to count yet". %>
+        <% if @season_tag %>
+          <div class="text-sm text-slate-400" data-role="main-nights"
+               title="League-night Mains entered this season, counted from the start of the night">
+            <%= pluralize(@main_nights.fetch(u.id, 0), "Main night") %> this season (<%= @season_tag %>)
+          </div>
+        <% end %>
       </div>
       <div class="flex items-center gap-2">
         <% if u == current_user %>

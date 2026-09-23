@@ -140,4 +140,12 @@ class Organizers::MembersControllerTest < ActionDispatch::IntegrationTest
       assert_select "[data-role='main-nights']", text: /1 Main night/
     end
   end
+  test "index hides the Main-nights line when the club has no season" do
+    create(:user, club: @club, role: :member, name: "Regular Ralph")
+    get organizers_members_path
+    assert_response :success
+    assert_select "[data-role='main-nights']", count: 0
+    assert_no_match(/Main nights? this season/, response.body)
+  end
+
 end

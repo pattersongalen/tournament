@@ -110,9 +110,13 @@ module Catches
             # fresh arrival. Existing tickets are untouched (PlaceInSlots no-ops
             # where the catch already holds an active placement).
             tagged_rows = reachable_rows.select { |r| r[:tournament].format_tagged? }
-            lock_entries!(tagged_rows.map { |r| r[:entry].id })
-            tagged_rows.each do |r|
-              ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, tournament: r[:tournament])
+            if tagged_rows.any?
+              lock_entries!(tagged_rows.map { |r| r[:entry].id })
+              # One run scoped to the list: PlaceInSlots resolves the reachable
+              # tournaments itself, so a per-tournament call would repeat that
+              # lookup once per tagged tournament under the row lock held here.
+              ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club,
+                                           tournaments: tagged_rows.map { |r| r[:tournament] })
             end
           end
           # present -> present (a typo fix) changes no placement: the ticket a
@@ -143,8 +147,7 @@ module Catches
             # for grow and shrink alike (no shrink gating). A species or tag change
             # that already rebuilt placements via deactivate_and_replace! used the
             # new length, so skip then.
-            candidate_rows = ::Tournaments::ActiveForUser
-              .with_entries(user: @catch.user, at: @catch.captured_at_device)
+            candidate_rows = reachable_rows
             # Which of those tournaments actually score this species? Resolve it in
             # one query rather than a per-row scoring_slots.exists? (an N+1 under the
             # @catch row lock we hold here).
@@ -157,13 +160,15 @@ module Catches
             # or whose window no longer covers captured_at_device. A stale placement
             # can still live in one of those, so union in every tournament where the
             # catch currently holds an active placement. Keyed by entry id, so a
-            # tournament in both sets is reconciled once.
+            # tournament in both sets is reconciled once. reachable_rows already
+            # narrowed `eligible` to the editing club; narrow this half the same
+            # way so a per-club edit never reconciles another club's basket.
             placed = @catch.catch_placements.active
               .includes(tournament_entry: :tournament)
               .map { |p| { tournament: p.tournament, entry: p.tournament_entry } }
+            placed = placed.select { |r| r[:tournament].club_id == @club.id } if @club
 
             rows = (eligible + placed).uniq { |r| r[:entry].id }
-            rows = rows.select { |r| r[:tournament].club_id == @club.id } if @club
             rows.sort_by { |r| r[:entry].id }  # stable lock order
               .each do |r|
                 Catches::ReconcileBasket.call(tournament: r[:tournament], entry: r[:entry], species: @catch.species)

@@ -18,11 +18,20 @@ module Tournaments
   class PointsScale
     def self.call(club:, entry_count:, angler_count:)
       return nil if entry_count.to_i < club.season_points_min_entries
+      return entry_count.to_i.downto(1).to_a if club.season_points_scheme_full_field?
 
+      ladder_for(club: club, angler_count: angler_count)
+    end
+
+    # The band ladder for an angler count with no minimum-entries gate: what
+    # the "how points work" explainer and the admin preview show per band,
+    # where there is no field to gate on. Nil under full_field, whose ladder
+    # is sized by the entry count rather than an angler band — callers show
+    # that scheme in prose instead of a band table.
+    def self.ladder_for(club:, angler_count:)
       case club.season_points_scheme
       when "tiered_ladders" then tiered_ladder(club, angler_count)
       when "base_ladder"    then scaled_base_ladder(club, angler_count)
-      when "full_field"     then entry_count.to_i.downto(1).to_a
       end
     end
 

@@ -351,4 +351,12 @@ class Admin::MembersControllerTest < ActionDispatch::IntegrationTest
     end
     assert_equal 1, queries.size, "expected one grouped entry count, got:\n#{queries.join("\n")}"
   end
+  test "index hides the Main-nights column when the club has no season" do
+    sign_in_as(@organizer)
+    get admin_members_path
+    assert_response :success
+    assert_select "th", text: "Main nights", count: 0
+    assert_select "td[data-role='main-nights']", count: 0
+  end
+
 end

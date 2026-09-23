@@ -12,7 +12,11 @@
         <th class="px-6 py-4 text-sm font-semibold text-slate-300">Email</th>
         <th class="px-6 py-4 text-sm font-semibold text-slate-300">Role</th>
         <th class="px-6 py-4 text-sm font-semibold text-slate-300 text-center">Tournaments</th>
-        <th class="px-6 py-4 text-sm font-semibold text-slate-300 text-center" title="League-night Mains entered this season<%= " (#{@season_tag})" if @season_tag %>">Main nights</th>
+        <%# Hidden when the club has no season: a column of zeros would read
+            as real counts rather than "nothing to count yet". %>
+        <% if @season_tag %>
+          <th class="px-6 py-4 text-sm font-semibold text-slate-300 text-center" title="League-night Mains entered this season (<%= @season_tag %>)">Main nights</th>
+        <% end %>
         <th class="px-6 py-4 text-sm font-semibold text-slate-300">Last seen</th>
         <th class="px-6 py-4 text-sm font-semibold text-slate-300 text-right">Actions</th>
       </tr>
@@ -48,7 +52,9 @@
             </div>
           </td>
           <td class="px-6 py-4 text-sm text-slate-400 text-center" data-role="entries"><%= @entry_counts.fetch(u.id, 0) %></td>
-          <td class="px-6 py-4 text-sm text-slate-400 text-center" data-role="main-nights"><%= @main_nights.fetch(u.id, 0) %></td>
+          <% if @season_tag %>
+            <td class="px-6 py-4 text-sm text-slate-400 text-center" data-role="main-nights"><%= @main_nights.fetch(u.id, 0) %></td>
+          <% end %>
           <td class="px-6 py-4 text-sm text-slate-400">
             <% if u.last_seen_at %>
               <time datetime="<%= u.last_seen_at.iso8601 %>" title="<%= u.last_seen_at.to_fs(:long) %>">
