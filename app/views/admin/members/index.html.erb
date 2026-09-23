@@ -19,7 +19,6 @@
     </thead>
     <tbody class="divide-y divide-slate-700">
       <% @users.each do |u| %>
-        <% entries = u.tournament_entry_members.joins(:tournament_entry).count %>
         <tr class="hover:bg-slate-700/30 transition-colors">
           <td class="px-6 py-4">
             <div class="font-medium text-slate-100 flex items-center gap-2">
@@ -48,7 +47,7 @@
               <% end %>
             </div>
           </td>
-          <td class="px-6 py-4 text-sm text-slate-400 text-center"><%= entries %></td>
+          <td class="px-6 py-4 text-sm text-slate-400 text-center" data-role="entries"><%= @entry_counts.fetch(u.id, 0) %></td>
           <td class="px-6 py-4 text-sm text-slate-400 text-center" data-role="main-nights"><%= @main_nights.fetch(u.id, 0) %></td>
           <td class="px-6 py-4 text-sm text-slate-400">
             <% if u.last_seen_at %>

@@ -60,44 +60,50 @@ module Catches
         when :manual_override
           prior_length  = @catch.length_inches
           prior_species = @catch.species_id
+          prior_tag     = @catch.tag_number.presence
 
-          # Order: length first, then species, then slot-force / length-shrink rebalance.
-          # Length must update before the species-change block so PlaceInSlots ranks the
-          # catch with its NEW length when looking for slots in the new species.
           length_changed  = @length_inches && @length_inches.to_f != prior_length.to_f
           unit_changed    = @length_unit.present? && @length_unit != @catch.length_unit
           species_changed = @species_id.present? && @species_id != prior_species
-          if @length_inches && (length_changed || unit_changed)
-            @catch.update!({ length_inches: @length_inches, length_unit: @length_unit }.compact)
+          # Science tag. nil means "not on this form" and leaves the tag alone; a
+          # submitted value (blank included) is normalized the way the model will
+          # store it and compared to the stored tag, so re-saving an unchanged tag
+          # is a no-op.
+          new_tag     = ::Catch.normalize_tag(@tag_number) unless @tag_number.nil?
+          tag_changed = !@tag_number.nil? && new_tag != prior_tag
+
+          # One update! for every edited field so the model's Tagged-Walleye
+          # tag-required rule sees the final species/tag pair: a species change
+          # away from Tagged Walleye that blanks the tag, or a length fix on a
+          # Tagged Walleye stranded with a blank tag, would otherwise be rejected
+          # by an intermediate save. Length lands before the rebuild below so
+          # PlaceInSlots ranks the catch with its NEW length in the NEW species.
+          attrs = {}
+          attrs.merge!({ length_inches: @length_inches, length_unit: @length_unit }.compact) if @length_inches && (length_changed || unit_changed)
+          attrs[:species_id] = @species_id if species_changed
+          attrs[:tag_number] = new_tag if tag_changed
+          if attrs.any?
+            @catch.update!(attrs)
             @notify_owner = true
           end
 
-          # Science tag. nil means "not on this form" and leaves the tag alone;
-          # a submitted value (blank included) is compared against the stored
-          # tag after the same trim/upcase the model applies, so re-saving an
-          # unchanged tag is a no-op. Tagged tournaments skip a blank-tag catch
-          # at placement time, so a tag change rebuilds placements — that is
-          # what lets a stranded catch reach the draw once its tag is filled in.
-          tag_changed = !@tag_number.nil? &&
-                        @tag_number.to_s.strip.upcase.presence != @catch.tag_number.presence
-          if tag_changed
-            @catch.update!(tag_number: @tag_number.presence)
-            @notify_owner = true
-          end
-
-          if species_changed
-            @notify_owner = true
-            # Update species first, then rebuild placements from scratch so
-            # PlaceInSlots ranks/places the catch under the NEW species. The
-            # lock set (current + reachable entries) is independent of species,
-            # so computing it inside deactivate_and_replace! after the update is
-            # equivalent — and PlaceInSlots only places where the user has an
-            # entry at captured_at_device and a slot exists for the new species.
-            @catch.update!(species_id: @species_id)
+          # Only a tagged-format tournament scores the tag, and only its presence:
+          # each tagged catch earns one ticket, a blank-tag catch is skipped.
+          rebuilt = false
+          if species_changed || (tag_changed && new_tag.nil?)
+            # A new species, or a tag going present -> blank, can make the catch
+            # newly (in)eligible, so rebuild its placements from scratch.
             deactivate_and_replace!
-          elsif tag_changed
-            deactivate_and_replace!
+            rebuilt = true
+          elsif tag_changed && prior_tag.nil?
+            # blank -> present: the catch may now qualify for a tagged tournament
+            # that skipped it. PlaceInSlots no-ops where it already holds a
+            # placement, so existing tickets and baskets are untouched.
+            lock_entries!(reachable_entry_ids)
+            ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club)
           end
+          # present -> present (a typo fix) changes no placement: the ticket a
+          # drawn winner rests on stays the same row.
 
           if @slot_index && @entry_id
             # A forced slot is only durable/meaningful on slot-based formats. On a
@@ -114,14 +120,15 @@ module Catches
               catch: @catch, tournament: @tournament, tournament_entry: entry,
               species: @catch.species, slot_index: @slot_index, active: true
             )
-          elsif !species_changed && @length_inches && prior_length && @length_inches.to_f != prior_length.to_f
+          elsif !rebuilt && @length_inches && prior_length && @length_inches.to_f != prior_length.to_f
             # A length edit can change which catches make each basket — it can pull
             # in a previously-unplaced backup (e.g. one grown past a slot threshold)
             # or drop a now-smaller fish. So re-derive every tournament the catch is
             # ELIGIBLE for at its capture time, not just the ones where it currently
             # holds a placement. Re-derivation from the whole eligible set is correct
-            # for grow and shrink alike (no shrink gating). A species change already
-            # rebuilt placements via deactivate_and_replace!, so skip then.
+            # for grow and shrink alike (no shrink gating). A species or tag change
+            # that already rebuilt placements via deactivate_and_replace! used the
+            # new length, so skip then.
             candidate_rows = ::Tournaments::ActiveForUser
               .with_entries(user: @catch.user, at: @catch.captured_at_device)
             # Which of those tournaments actually score this species? Resolve it in
@@ -276,7 +283,7 @@ module Catches
     # then re-place the catch under its current state. A changed location,
     # override, or species can make the catch newly (in)eligible, so placements
     # are rebuilt from scratch. Used by geofence_override, correct_location, and
-    # the species-change branch of manual_override.
+    # the species-change / tag-blanked branch of manual_override.
     def deactivate_and_replace!
       # A per-club editor edit only rebuilds its own club's placements; a judge
       # action (no @club) rebuilds every tournament the catch is in.

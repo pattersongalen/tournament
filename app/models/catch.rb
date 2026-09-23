@@ -130,8 +130,15 @@ class Catch < ApplicationRecord
 
   private
 
+  # The stored form of a science tag: trimmed, upcased, blank -> nil. Public so
+  # editors can tell whether a submitted tag actually differs from the stored one
+  # before saving (and so the rule lives in exactly one place).
+  def self.normalize_tag(value)
+    value.to_s.strip.upcase.presence
+  end
+
   def normalize_tag_number
-    self.tag_number = tag_number.to_s.strip.upcase if tag_number.present?
+    self.tag_number = self.class.normalize_tag(tag_number) if tag_number.present?
   end
 
   def default_length_unit

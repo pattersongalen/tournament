@@ -174,4 +174,17 @@ class Organizers::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_match(/required for Tagged Walleye/, flash[:alert])
     assert_equal "A0042", fish.reload.tag_number
   end
+  test "edit form hides the science tag field for a species that is not Tagged Walleye" do
+    fish = create(:catch, user: @member, length_inches: 18.0)
+    sign_in_as(@organizer)
+    get organizers_catch_path(fish.id)
+    assert_select "[data-tag-field-target='wrapper'].hidden input[name=tag_number]"
+  end
+
+  test "edit form shows the science tag field for a non-Tagged-Walleye catch that carries a stray tag" do
+    fish = create(:catch, user: @member, length_inches: 18.0, tag_number: "STRAY")
+    sign_in_as(@organizer)
+    get organizers_catch_path(fish.id)
+    assert_select "[data-tag-field-target='wrapper']:not(.hidden) input[name=tag_number][value=STRAY]"
+  end
 end

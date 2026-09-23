@@ -1138,5 +1138,69 @@ module Catches
                             tag_number: "a0001", note: "no change", club: @club)
       assert_equal "A0001", fish.reload.tag_number
     end
+    test "manual_override changes species away from Tagged Walleye and clears the tag in one submit" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0, tag_number: "A0042")
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            species_id: @walleye.id, tag_number: "", note: "mis-logged", club: @club)
+      fish.reload
+      assert_equal @walleye.id, fish.species_id
+      assert_nil fish.tag_number
+    end
+
+    def tagged_tournament_with_placed_fish
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                    tag_number: "X1795\u201d", captured_at_device: 30.minutes.ago)
+      Catches::PlaceInSlots.call(catch: fish)
+      [t, fish, CatchPlacement.find_by!(tournament: t, catch: fish, active: true)]
+    end
+
+    test "manual_override tag typo fix keeps the existing ticket instead of rebuilding it" do
+      t, fish, ticket = tagged_tournament_with_placed_fish
+      t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: "X1795", note: "typo", club: @club)
+
+      assert_equal "X1795", fish.reload.tag_number
+      assert ticket.reload.active, "the drawn ticket must survive a present-to-present tag edit"
+      assert_equal [ticket.id], CatchPlacement.where(tournament: t, catch: fish, active: true).pluck(:id)
+    end
+
+    test "manual_override re-saving the same tag does not touch placements" do
+      _t, fish, ticket = tagged_tournament_with_placed_fish
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: " x1795\u201d ", note: "", club: @club)
+      assert ticket.reload.active
+      assert_equal 1, CatchPlacement.where(catch: fish).count
+    end
+
+    test "manual_override tag added together with a length change places the catch at the new length" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                    tag_number: "TMP", captured_at_device: 30.minutes.ago)
+      fish.update_column(:tag_number, nil)
+
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: "A0042", length_inches: 21.0, length_unit: "inches",
+                            note: "", club: @club)
+      fish.reload
+      assert_equal "A0042", fish.tag_number
+      assert_equal 21.0, fish.length_inches.to_f
+      assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+    end
   end
 end

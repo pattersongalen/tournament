@@ -324,4 +324,23 @@ class Admin::MembersControllerTest < ActionDispatch::IntegrationTest
       assert_select "td[data-role='main-nights']", text: "1"
     end
   end
+  test "index counts each member's tournament entries with one grouped query" do
+    2.times do |i|
+      t = create(:tournament, club: @club, starts_at: (i + 1).weeks.ago, ends_at: (i + 1).weeks.ago + 3.hours)
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @member)
+    end
+
+    sign_in_as(@organizer)
+    queries = []
+    counter = ->(_name, _start, _finish, _id, payload) do
+      queries << payload[:sql] if payload[:sql] =~ /tournament_entry_members/i && payload[:sql] =~ /COUNT/i
+    end
+    ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { get admin_members_path }
+    assert_response :success
+    assert_select "tr", text: /Old Name/ do
+      assert_select "td[data-role='entries']", text: "2"
+    end
+    assert_equal 1, queries.size, "expected one grouped entry count, got:\n#{queries.join("\n")}"
+  end
 end

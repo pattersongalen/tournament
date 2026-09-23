@@ -10,6 +10,9 @@ class Admin::MembersController < Admin::BaseController
     # teammate) can't be purged — mirror MembersController#purge's guard so the
     # Delete button only shows when the destroy! would actually succeed.
     member_ids = @users.map(&:id)
+    # One grouped count for the Tournaments column instead of a COUNT per row.
+    @entry_counts = TournamentEntryMember.joins(:tournament_entry)
+      .where(user_id: member_ids).group(:user_id).count
     @member_ids_with_catches = (
       Catch.where(user_id: member_ids).distinct.pluck(:user_id) +
       Catch.where(logged_by_user_id: member_ids).distinct.pluck(:logged_by_user_id)

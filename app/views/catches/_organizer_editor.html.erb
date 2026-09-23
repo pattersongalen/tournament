@@ -7,6 +7,11 @@
   unit    = catch_record.length_unit
   prefill = unit == "centimeters" ? display_cm(catch_record.length_inches, unit) : catch_record.length_inches
   species_options = ordered_species.map { |s| [s.name, s.id] }
+  tagged_species_id = ordered_species.find(&:tagged_walleye?)&.id
+  # The tag only scores on Tagged Walleye. Show the field there, and on any
+  # catch already carrying a (stray) tag so it can be cleared; hide it otherwise
+  # so a length fix on a plain Walleye doesn't invite a meaningless tag.
+  show_tag = catch_record.species.tagged_walleye? || catch_record.tag_number.present?
 %>
 
 <div class="mb-4">
@@ -24,9 +29,11 @@
 
 <h2 class="text-lg font-semibold mb-2">Edit species, length &amp; tag</h2>
 <%= form_with url: url_for(action: :update, id: catch_record.id), method: :patch,
-              local: true, data: { controller: "length-edit" } do %>
+              local: true, data: { controller: "length-edit tag-field",
+                                   tag_field_tagged_species_id_value: tagged_species_id } do %>
   <%= label_tag :species_id, "Species", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
   <%= select_tag :species_id, options_for_select(species_options, catch_record.species_id),
+                 data: { action: "change->tag-field#toggle" },
                  class: "w-full h-12 px-3 rounded-lg bg-slate-800 border border-slate-700 text-base text-slate-100" %>
 
   <%= label_tag :length, "Length", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
@@ -48,10 +55,13 @@
     <% end %>
   </div>
 
-  <%= label_tag :tag_number, "Science tag # (Tagged Walleye)", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
-  <%= text_field_tag :tag_number, catch_record.tag_number, maxlength: 16, autocomplete: "off",
-                     autocapitalize: "characters", spellcheck: false,
-                     class: "w-full h-12 px-3 rounded-lg bg-slate-800 border border-slate-700 text-base text-slate-100 font-mono uppercase" %>
+  <div data-tag-field-target="wrapper" class="<%= 'hidden' unless show_tag %>">
+    <%= label_tag :tag_number, "Science tag # (Tagged Walleye)", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
+    <%= text_field_tag :tag_number, catch_record.tag_number, maxlength: 16, autocomplete: "off",
+                       autocapitalize: "characters", spellcheck: false,
+                       data: { "tag-field-target": "input" },
+                       class: "w-full h-12 px-3 rounded-lg bg-slate-800 border border-slate-700 text-base text-slate-100 font-mono uppercase" %>
+  </div>
 
   <%= label_tag :note, "Note (optional)", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
   <%= text_area_tag :note, nil, rows: 3,
