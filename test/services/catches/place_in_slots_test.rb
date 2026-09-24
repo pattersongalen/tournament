@@ -924,6 +924,7 @@ module Catches
     PlaceInSlots.call(catch: first)
     ticket = CatchPlacement.find_by!(tournament: t, catch: first, active: true)
     t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+    ticket.update_column(:in_draw_pool, true)
 
     late = create(:catch, user: user, species: tagged, length_inches: 17.0,
                   tag_number: "A0002", captured_at_device: 90.minutes.ago)
@@ -948,14 +949,45 @@ module Catches
     PlaceInSlots.call(catch: fish)
     ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
     t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+    ticket.update_column(:in_draw_pool, true)
 
     # The judge flows deactivate before re-placing (correction, DQ -> reinstate).
     ticket.update!(active: false)
     result = PlaceInSlots.call(catch: fish)
 
+    reissued = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
     assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
                  "a fish that was in the draw keeps a ticket after a post-draw re-placement"
+    assert reissued.in_draw_pool, "the re-issued ticket inherits the fish's place in the pool"
+    assert_equal reissued.id, t.reload.drawn_winning_placement_id,
+                 "the recorded winner follows the winning fish onto its re-issued ticket"
     assert_equal [t], result[:affected_tournaments]
+  end
+
+  test "tagged: re-placing a non-winning fish after the draw leaves the recorded winner alone" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    winner = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                    tag_number: "A0001", captured_at_device: 2.hours.ago)
+    other = create(:catch, user: user, species: tagged, length_inches: 17.0,
+                   tag_number: "A0002", captured_at_device: 100.minutes.ago)
+    PlaceInSlots.call(catch: winner)
+    PlaceInSlots.call(catch: other)
+    winning_ticket = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
+    CatchPlacement.where(tournament: t).update_all(in_draw_pool: true)
+    t.update_columns(drawn_winning_placement_id: winning_ticket.id, drawn_at: Time.current)
+
+    CatchPlacement.where(tournament: t, catch: other).deactivate_all
+    PlaceInSlots.call(catch: other)
+
+    assert_equal winning_ticket.id, t.reload.drawn_winning_placement_id
   end
 
   test "tagged: a fish whose ticket was pulled before the draw earns no ticket after it" do
@@ -973,11 +1005,13 @@ module Catches
     PlaceInSlots.call(catch: fish)
     ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
 
-    # Pulled from the pool (a DQ) an hour BEFORE the draw ran: the row exists,
-    # but the fish was not in the draw.
+    # Pulled from the pool (a DQ) BEFORE the draw ran: the row exists, but the
+    # draw never stamped it. A later write to the retired row (a backfill, a
+    # touch) must not change that: pool membership is a recorded fact, not a
+    # timestamp comparison.
     CatchPlacement.where(id: ticket.id).deactivate_all
-    ticket.update_column(:updated_at, 1.hour.ago)
     t.update_columns(drawn_winning_placement_id: nil, drawn_at: 30.minutes.ago)
+    ticket.update_column(:updated_at, Time.current)
 
     result = PlaceInSlots.call(catch: fish)
 

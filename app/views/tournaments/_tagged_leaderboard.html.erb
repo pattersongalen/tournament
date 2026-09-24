@@ -10,6 +10,9 @@
   # to plain walleye). Check by catch, not by row: a GPS fix re-issues the
   # ticket as a new row and the fish is still the winner.
   winner_void = winner_catch && !tournament.catch_placements.active.exists?(catch_id: winner_catch.id)
+  # A re-draw runs over the tickets still active. With none left the draw
+  # service refuses, so offer nothing rather than a button that fails.
+  tickets_remain = winner_void && tournament.catch_placements.active.exists?
   can_draw    = current_user&.organizer_in?(tournament.club) && tournament.ended?
 %>
 <div id="leaderboard">
@@ -18,10 +21,15 @@
       <p class="text-sm text-rose-200 uppercase tracking-wide">Draw void</p>
       <p class="text-rose-100 mt-1">
         The drawn fish (<%= winner_catch.user.name %>, tag <%= winner_catch.tag_number %>)
-        no longer holds a ticket. An organizer needs to re-draw.
+        no longer holds a ticket.
+        <% if tickets_remain %>
+          An organizer needs to re-draw.
+        <% else %>
+          No other tickets remain, so there is nothing to re-draw.
+        <% end %>
       </p>
     </div>
-    <% if can_draw %>
+    <% if can_draw && tickets_remain %>
       <%= button_to "Re-draw winner", draw_organizers_tournament_path(tournament, force: 1),
                     method: :post, data: { turbo_confirm: "Re-roll the draw among the remaining tickets?" },
                     class: "mb-4 inline-flex h-10 px-4 items-center justify-center rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold" %>

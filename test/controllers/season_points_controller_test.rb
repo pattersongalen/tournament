@@ -141,19 +141,23 @@ class SeasonPointsControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "5 entries"
   end
 
-  # The ladder bands count anglers while the minimum counts entries, so a
-  # raised minimum must not re-label the angler bands: a 5-boat minimum says
-  # nothing about how many anglers a paying night has.
-  test "standings page explainer keeps the angler bands whole after a raised minimum" do
+  # The ladder bands count anglers while the minimum counts entries, but every
+  # entry carries at least one angler, so angler counts below the minimum can
+  # never pay placement points: the table must not advertise a ladder for them.
+  test "standings page explainer clips the first angler band to the entry minimum" do
     @club.update!(season_points_min_entries: 5)
     create(:tournament, club: @club, awards_season_points: true, season_tag: "Spring 2026",
            starts_at: 6.days.ago, ends_at: 5.days.ago)
     sign_in_member!
     get season_points_path
     assert_response :success
-    row = Nokogiri::HTML(response.body).css("tr").find { |tr| tr.text.include?("1–9") }
-    assert row, "expected the 1–9 anglers row to stay in the explainer table"
-    assert_match "3, 2, 1", row.text
-    assert_not_includes response.body, "5–9"
+    rows = Nokogiri::HTML(response.body).css("tr")
+    below = rows.find { |tr| tr.text.include?("1–4") }
+    assert below, "expected a 1–4 anglers row"
+    assert_match "attendance only", below.text
+    paying = rows.find { |tr| tr.text.include?("5–9") }
+    assert paying, "expected the first paying band to start at the minimum"
+    assert_match "3, 2, 1", paying.text
+    assert_nil rows.find { |tr| tr.text.include?("1–9") }, "no row may promise a ladder to a field the minimum rules out"
   end
 end

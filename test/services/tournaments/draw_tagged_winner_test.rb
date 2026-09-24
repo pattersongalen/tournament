@@ -84,6 +84,44 @@ module Tournaments
       end
     end
 
+    test "stamps every active ticket as the drawn pool and leaves retired rows out" do
+      live = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
+                      tag_number: "A001", captured_at_device: 90.minutes.ago)
+      )[:created].first
+      retired = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 17.0,
+                      tag_number: "A002", captured_at_device: 80.minutes.ago)
+      )[:created].first
+      CatchPlacement.where(id: retired.id).deactivate_all
+
+      Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+
+      assert live.reload.in_draw_pool, "an active ticket is in the pool the draw ran over"
+      assert_not retired.reload.in_draw_pool, "a ticket pulled before the draw was never in the pool"
+    end
+
+    test "a forced re-draw re-stamps the pool from the tickets active now" do
+      first = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
+                      tag_number: "A001", captured_at_device: 90.minutes.ago)
+      )[:created].first
+      second = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 17.0,
+                      tag_number: "A002", captured_at_device: 80.minutes.ago)
+      )[:created].first
+      Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+      assert first.reload.in_draw_pool && second.reload.in_draw_pool
+
+      # The first fish is pulled after the draw; the re-draw runs over what is left.
+      CatchPlacement.where(id: first.id).deactivate_all
+      Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer, force: true)
+
+      assert_not first.reload.in_draw_pool, "a ticket pulled before the re-draw is out of the new pool"
+      assert second.reload.in_draw_pool
+      assert_equal second.id, @t.reload.drawn_winning_placement_id
+    end
+
     test "enqueues a push notification to the winner" do
       Catches::PlaceInSlots.call(
         catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,

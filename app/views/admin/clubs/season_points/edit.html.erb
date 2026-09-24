@@ -117,7 +117,13 @@
         </tr>
       </thead>
       <tbody>
-        <% Club.season_points_bands.each do |band| %>
+        <% if (below = @preview_club.season_points_attendance_only_label) %>
+          <tr class="border-t border-slate-700">
+            <td class="px-3 py-3"><%= below %> anglers</td>
+            <td class="px-3 py-3 font-mono">attendance only</td>
+          </tr>
+        <% end %>
+        <% @preview_club.effective_season_points_bands.each do |band| %>
           <% scale = Tournaments::PointsScale.ladder_for(club: @preview_club, angler_count: band[:sample]) %>
           <tr class="border-t border-slate-700">
             <td class="px-3 py-3"><%= band[:label] %> anglers</td>

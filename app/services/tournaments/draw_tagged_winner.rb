@@ -35,6 +35,13 @@ module Tournaments
         # SecureRandom (CSPRNG) rather than Array#sample (MT19937) so the draw
         # outcome can't be predicted by anyone who's seen previous Ruby PRNG output.
         winner = eligible[SecureRandom.random_number(eligible.size)]
+        # Record the pool as a fact on the rows drawn from. PlaceInSlots reads
+        # it to decide whether a post-draw re-placement re-issues a ticket
+        # (the fish was in the draw) or earns none (it was not). A forced
+        # re-draw runs over the tickets active NOW, so the flag means "in the
+        # most recent draw": clear it before stamping.
+        @tournament.catch_placements.where(in_draw_pool: true).update_all(in_draw_pool: false)
+        CatchPlacement.where(id: eligible.map(&:id)).update_all(in_draw_pool: true)
         @tournament.update!(
           drawn_winning_placement_id: winner.id,
           drawn_at: Time.current,

@@ -1144,6 +1144,7 @@ module Catches
       Catches::PlaceInSlots.call(catch: winner)
       ticket = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
       t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
 
       stranded = create(:catch, user: @user, species: tagged, length_inches: 18.0,
                         tag_number: "TMP", captured_at_device: 90.minutes.ago)
@@ -1171,12 +1172,66 @@ module Catches
       Catches::PlaceInSlots.call(catch: winner)
       ticket = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
       t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
 
       ApplyJudgeAction.call(tournament: nil, catch: winner, judge: @judge, action: :correct_location,
                             latitude: winner.latitude, longitude: winner.longitude, note: "gps fix", club: @club)
 
+      reissued = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
       assert_equal 1, CatchPlacement.where(tournament: t, catch: winner, active: true).count,
                    "a post-draw correction must not strip a ticket that was in the draw"
+      assert_equal reissued.id, t.reload.drawn_winning_placement_id,
+                   "the recorded winner must point at the live ticket, not the retired row"
+      assert t.drawn_winning_placement.active?
+    end
+
+    test "reinstate hands PlaceInSlots the rows it already resolved to lock" do
+      ApplyJudgeAction.call(tournament: @t, catch: @catch, judge: @judge, action: :disqualify, note: "oops")
+
+      calls = 0
+      original = ::Tournaments::ActiveForUser.method(:with_entries)
+      ::Tournaments::ActiveForUser.define_singleton_method(:with_entries) do |**kwargs|
+        calls += 1
+        original.call(**kwargs)
+      end
+      begin
+        ApplyJudgeAction.call(tournament: @t, catch: @catch, judge: @judge, action: :reinstate)
+      ensure
+        ::Tournaments::ActiveForUser.define_singleton_method(:with_entries, original)
+      end
+
+      assert_equal 1, calls, "the entry set is resolved once, before the locks, not again inside PlaceInSlots"
+      assert_equal @catch.id, @entry.catch_placements.active.first&.catch_id
+    end
+
+    test "manual_override with a tag and a length fix loads the catch's placements once" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                    tag_number: "TMP", captured_at_device: 2.hours.ago)
+      fish.update_column(:tag_number, nil)
+
+      # The club-scoped rebuildable set is the only catch_placements read that
+      # joins tournaments; it feeds both the entry locks and the length reconcile.
+      rebuildable_reads = 0
+      counter = ->(_name, _start, _finish, _id, payload) do
+        sql = payload[:sql].to_s
+        rebuildable_reads += 1 if sql.start_with?("SELECT") && sql.include?('"catch_placements"') && sql.include?('INNER JOIN "tournaments"')
+      end
+      ActiveSupport::Notifications.subscribed(counter, "sql.active_record") do
+        ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                              tag_number: "A0042", length_inches: 19.0,
+                              note: "tag + length", club: @club)
+      end
+
+      assert_equal 1, rebuildable_reads
+      assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+      assert_equal 19.0, fish.reload.length_inches.to_f
     end
 
     test "reinstate after the draw restores the DQ'd fish's ticket" do
@@ -1192,6 +1247,7 @@ module Catches
       Catches::PlaceInSlots.call(catch: fish)
       ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
       t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
 
       ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :disqualify, note: "oops")
       assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count
@@ -1241,6 +1297,7 @@ module Catches
       Catches::PlaceInSlots.call(catch: winner)
       ticket = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
       t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
 
       travel 1.minute do
         ApplyJudgeAction.call(tournament: nil, catch: winner, judge: @judge, action: :manual_override,
@@ -1290,6 +1347,7 @@ module Catches
     test "manual_override tag typo fix keeps the existing ticket instead of rebuilding it" do
       t, fish, ticket = tagged_tournament_with_placed_fish
       t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
 
       ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
                             tag_number: "X1795", note: "typo", club: @club)

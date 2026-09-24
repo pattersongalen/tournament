@@ -174,6 +174,24 @@ class ClubTest < ActiveSupport::TestCase
     ], Club.season_points_bands
   end
 
+  # Every entry has at least one angler aboard, so a night below the entry
+  # minimum is also below it in anglers: the first angler band starts at the
+  # minimum and any band wholly below it is dropped.
+  test "effective_season_points_bands clips the first angler band to the minimum entry count and drops bands below it" do
+    club = create(:club, season_points_min_entries: 5)
+    assert_equal ["5–9", "10–19", "20–29", "30+"], club.effective_season_points_bands.map { |b| b[:label] }
+    assert_equal [9, 19, 29, 30], club.effective_season_points_bands.map { |b| b[:sample] }
+    assert_equal "1–4", club.season_points_attendance_only_label
+    club.season_points_min_entries = 12
+    assert_equal ["12–19", "20–29", "30+"], club.effective_season_points_bands.map { |b| b[:label] }
+    assert_equal "1–11", club.season_points_attendance_only_label
+    club.season_points_min_entries = 2
+    assert_equal "1", club.season_points_attendance_only_label
+    club.season_points_min_entries = 1
+    assert_equal Club.season_points_bands, club.effective_season_points_bands
+    assert_nil club.season_points_attendance_only_label
+  end
+
   test "a parse failure stashes the raw base-ladder and multiplier text and keeps the saved values; reload clears the flags" do
     club = create(:club)
     club.season_points_base_ladder_text = "3, 2, x"

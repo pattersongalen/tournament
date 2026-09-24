@@ -18,11 +18,10 @@ class CatchPlacement < ApplicationRecord
   scope :active, -> { where(active: true) }
 
   # Retire every row in the relation in one statement, stamping updated_at the
-  # way update! would. A plain update_all leaves the stamp at creation time,
-  # and updated_at is how PlaceInSlots tells a tagged ticket pulled BEFORE the
-  # draw (not in the pool) from one pulled after it (in the pool, may be
-  # re-issued). Use this, not update_all(active: false), wherever a ticket can
-  # be retired.
+  # way update! would so the audit trail records when the row was retired (a
+  # plain update_all leaves the stamp at creation time). Nothing scores off
+  # the stamp: whether a tagged ticket was in the draw is recorded on
+  # in_draw_pool by Tournaments::DrawTaggedWinner.
   def self.deactivate_all
     update_all(active: false, updated_at: ::Time.current)
   end

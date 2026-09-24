@@ -155,20 +155,30 @@ module Catches
             # judge flows deactivate before re-placing: a GPS fix, a geofence
             # override, a DQ undone by reinstate) re-issues its ticket rather
             # than stripping it — the drawn winner's row must survive a
-            # correction to the winning fish. A ticket still active, or
-            # retired after drawn_at, was in the pool; one retired before the
-            # draw (a pre-draw DQ reinstated the next day) was not, and a
-            # fresh row would list a fish the draw never saw. updated_at is
-            # the retirement stamp: see CatchPlacement.deactivate_all.
-            if tournament.drawn_at.present?
-              next unless CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id)
-                                        .where("active OR updated_at >= ?", tournament.drawn_at).exists?
-            end
+            # correction to the winning fish. Tournaments::DrawTaggedWinner
+            # stamps in_draw_pool on the rows it drew from; a fish with no
+            # stamped row (a pre-draw DQ reinstated the next day) was not in
+            # the draw, and a fresh row would list a fish the draw never saw.
+            in_pool = tournament.drawn_at.present? &&
+              CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id, in_draw_pool: true).exists?
+            next if tournament.drawn_at.present? && !in_pool
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1
-            created << CatchPlacement.create!(
+            ticket = CatchPlacement.create!(
               catch: @catch, tournament: tournament, tournament_entry: entry,
-              species: @catch.species, slot_index: next_index, active: true
+              species: @catch.species, slot_index: next_index, active: true,
+              in_draw_pool: in_pool
             )
+            created << ticket
+            # The re-issued ticket may be the drawn winner's: point the
+            # tournament's recorded winner at the live row, not the retired
+            # one, so anything trusting the FK sees an active ticket. One
+            # guarded UPDATE against the current DB value rather than the
+            # possibly stale `tournament` loaded before the locks.
+            if in_pool
+              ::Tournament.where(id: tournament.id)
+                          .where(drawn_winning_placement_id: CatchPlacement.where(catch_id: @catch.id).select(:id))
+                          .update_all(drawn_winning_placement_id: ticket.id)
+            end
             affected_tournaments << tournament
           elsif tournament.format_biggest_vs_smallest?
             # Biggest vs Smallest: keep at most 2 placements per (entry, species) — the

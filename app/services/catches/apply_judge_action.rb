@@ -167,9 +167,7 @@ module Catches
             # (rebuildable_placements: every one for a judge, the editing club's
             # for a per-club edit — the same set lock_touched_entries! locks).
             # Keyed by entry id, so a tournament in both sets is reconciled once.
-            placed = rebuildable_placements
-              .includes(tournament_entry: :tournament)
-              .map { |p| { tournament: p.tournament, entry: p.tournament_entry } }
+            placed = rebuildable_placements.map { |p| { tournament: p.tournament, entry: p.tournament_entry } }
 
             rows = (eligible + placed).uniq { |r| r[:entry].id }
             rows.sort_by { |r| r[:entry].id }  # stable lock order
@@ -208,7 +206,9 @@ module Catches
           lock_entries!(reachable_entry_ids)
           @catch.update!(status: restored_status)
           @notify_owner = true
-          ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false)
+          # Hand over the rows resolved for the locks above rather than have
+          # PlaceInSlots run ActiveForUser again while holding them.
+          ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
         end
         after = snapshot
 
@@ -315,10 +315,18 @@ module Catches
 
     # The catch's active placements this edit may rebuild: every one for a judge
     # action (no @club), only the editing club's for a per-club editor edit.
+    # Loaded once, with the entry and tournament each caller reads: it feeds
+    # the entry locks, the freed-slot reconcile and the length reconcile, all
+    # under the @catch row lock, and the set can't change between them (the
+    # catch lock serializes every writer of its placements). A tag edit that
+    # mints a ticket in between adds only tagged rows, which the length
+    # reconcile treats as a no-op anyway.
     def rebuildable_placements
-      active = @catch.catch_placements.active
-      active = active.joins(:tournament).where(tournaments: { club_id: @club.id }) if @club
-      active
+      @rebuildable_placements ||= begin
+        active = @catch.catch_placements.active
+        active = active.joins(:tournament).where(tournaments: { club_id: @club.id }) if @club
+        active.includes(tournament_entry: :tournament).to_a
+      end
     end
 
     # Lock, in one ascending pass, every entry a re-placement can touch: the
@@ -326,7 +334,7 @@ module Catches
     # Taking them all up front keeps later per-entry locks (ReconcileBasket,
     # PlaceInSlots) re-locks of rows already held, so the order can't invert.
     def lock_touched_entries!
-      lock_entries!(rebuildable_placements.pluck(:tournament_entry_id) + reachable_entry_ids)
+      lock_entries!(rebuildable_placements.map(&:tournament_entry_id) + reachable_entry_ids)
     end
 
     # Drop the catch's active placements, promote backups into the freed slots,
@@ -336,8 +344,7 @@ module Catches
     # the species-change branch of manual_override.
     def deactivate_and_replace!
       lock_touched_entries!
-      active = rebuildable_placements
-      freed = active.to_a
+      freed = rebuildable_placements
       CatchPlacement.where(id: freed.map(&:id)).deactivate_all
       freed.each { |p| ::Catches::ReconcileFreedSlot.call(placement: p) }
       # lock_touched_entries! already resolved reachable_rows; hand them over

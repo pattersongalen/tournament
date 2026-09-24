@@ -59,12 +59,13 @@
         </div>
         <div class="p-6 space-y-3 text-sm">
           <% winner_catch = @tournament.drawn_winning_placement&.catch %>
+          <% tickets_remain = @tournament.catch_placements.active.exists? %>
           <% if winner_catch %>
             <p class="text-slate-300">
               Current winner: <span class="text-amber-200 font-semibold"><%= winner_catch.user.name %></span>
               &mdash; tag <span class="font-mono text-amber-200"><%= winner_catch.tag_number %></span>
               <% unless @tournament.catch_placements.active.exists?(catch_id: winner_catch.id) %>
-                <span class="text-rose-300 font-semibold">&mdash; no longer holds a ticket, re-draw needed</span>
+                <span class="text-rose-300 font-semibold">&mdash; no longer holds a ticket<%= tickets_remain ? ", re-draw needed" : "" %></span>
               <% end %>
             </p>
             <p class="text-xs text-slate-500">
@@ -72,14 +73,20 @@
               <% if @tournament.drawn_by_user %>by <%= @tournament.drawn_by_user.name %><% end %>.
             </p>
           <% end %>
-          <p class="text-xs text-slate-400">
-            Re-rolling overwrites the current winner. Use only if the winning catch was later DQ'd or otherwise invalidated.
-          </p>
-          <%= button_to "Re-draw winner",
-                        draw_organizers_tournament_path(@tournament, force: 1),
-                        method: :post,
-                        data: { turbo_confirm: "Re-roll the draw? The current winner will be replaced." },
-                        class: "inline-flex h-10 px-4 items-center justify-center rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold" %>
+          <% if tickets_remain %>
+            <p class="text-xs text-slate-400">
+              Re-rolling overwrites the current winner. Use only if the winning catch was later DQ'd or otherwise invalidated.
+            </p>
+            <%= button_to "Re-draw winner",
+                          draw_organizers_tournament_path(@tournament, force: 1),
+                          method: :post,
+                          data: { turbo_confirm: "Re-roll the draw? The current winner will be replaced." },
+                          class: "inline-flex h-10 px-4 items-center justify-center rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold" %>
+          <% else %>
+            <p class="text-xs text-slate-400">
+              No tickets remain in this tournament, so there is nothing to re-draw.
+            </p>
+          <% end %>
         </div>
       </div>
     <% end %>

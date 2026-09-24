@@ -37,6 +37,33 @@ class Club < ApplicationRecord
   end
   private_class_method :band_row
 
+  # The bands as THIS club can actually pay them. The bands count anglers and
+  # the minimum counts entries, but every entry has at least one angler
+  # aboard, so a night below the entry minimum is below it in anglers too:
+  # the first band starts at season_points_min_entries (a minimum of 5 pays
+  # the 1–9 ladder to 5–9-angler nights at the earliest) and any band wholly
+  # below the minimum is dropped. The admin preview and the member-facing
+  # explainer both read this so no row promises placement points to a field
+  # the minimum rules out. A night at or above the minimum in anglers can
+  # still fall short in entries (one boat, five aboard): the prose beside the
+  # table states the entry rule.
+  def effective_season_points_bands
+    min = season_points_min_entries.to_i
+    SEASON_POINTS_BANDS.filter_map do |band|
+      from = [band.begin, min].max
+      next if band.end != Float::INFINITY && from > band.end
+      self.class.send(:band_row, from, band)
+    end
+  end
+
+  # Angler counts the minimum rules out entirely ("1–4" for a minimum of 5),
+  # or nil when every field size can place.
+  def season_points_attendance_only_label
+    min = season_points_min_entries.to_i
+    return nil if min <= 1
+    min == 2 ? "1" : "1–#{min - 1}"
+  end
+
   validates :name, presence: true, uniqueness: true
   validate :season_points_ladders_are_well_formed
   validate :season_points_base_ladder_is_well_formed
