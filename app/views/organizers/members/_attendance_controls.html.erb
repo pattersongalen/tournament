@@ -8,12 +8,15 @@
            data-member-list-target="query" data-action="input->member-list#filter"
            class="w-full h-12 px-4 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500">
   </label>
+  <%# The pressed look keys off aria-pressed, which the controller flips; the
+      colours live here only, so a restyle can't drift from the toggled state. %>
+  <% sort_button = "h-12 px-4 rounded-lg text-sm font-medium bg-slate-700 text-slate-300 aria-pressed:bg-blue-600 aria-pressed:text-white" %>
   <div class="flex gap-2" role="group" aria-label="Sort by">
     <button type="button" data-sort="nights" aria-pressed="true"
             data-member-list-target="sortButton" data-action="member-list#sortBy"
-            class="h-12 px-4 rounded-lg text-sm font-medium bg-blue-600 text-white">Nights</button>
+            class="<%= sort_button %>">Nights</button>
     <button type="button" data-sort="name" aria-pressed="false"
             data-member-list-target="sortButton" data-action="member-list#sortBy"
-            class="h-12 px-4 rounded-lg text-sm font-medium bg-slate-700 text-slate-300">Name</button>
+            class="<%= sort_button %>">Name</button>
   </div>
 </div>

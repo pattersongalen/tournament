@@ -121,8 +121,12 @@ class CatchesController < ApplicationController
     @catch.synced_at = Time.current
 
     if @catch.save && @catch.photo.attached?
-      Catches::RunPlacementPipeline.call(catch: @catch)
-      redirect_to root_path, notice: teammate ? "Catch logged for #{teammate.name}" : "Catch logged"
+      placements = Catches::RunPlacementPipeline.call(catch: @catch)
+      notice = teammate ? "Catch logged for #{teammate.name}" : "Catch logged"
+      # A tagged catch that arrives after the draw keeps its tag but earns no
+      # ticket; say so here rather than let it look like a normal entry.
+      notice += ". The draw already ran, so no ticket was issued for it." if placements[:withheld].any?
+      redirect_to root_path, notice: notice
     else
       @catch.errors.add(:photo, "is required") unless @catch.photo.attached?
       @teammate = teammate

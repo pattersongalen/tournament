@@ -33,6 +33,7 @@ module Catches
       @snapshot_old_attachment_id = nil
       @notify_owner = false
       @ticket_withheld = false
+      @draw_voided = false
     end
 
     def call
@@ -118,14 +119,7 @@ module Catches
               lock_touched_entries!
               # One run scoped to the list, handed the rows already resolved
               # above so nothing is looked up again under the row locks.
-              placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows,
-                                                    tournaments: tagged_rows.map { |r| r[:tournament] })
-              # PlaceInSlots reports the tournaments where the draw alone kept
-              # it from minting a ticket. The tag still saves, so tell the
-              # caller: the organizer otherwise sees "Catch updated." and
-              # assumes a ticket. Any other reason for no ticket (a DQ'd
-              # catch, no scoring slot) is not the draw's doing.
-              @ticket_withheld = placed[:withheld].any?
+              place!(rows: reachable_rows, tournaments: tagged_rows.map { |r| r[:tournament] })
             end
           end
           # present -> present (a typo fix) changes no placement: the ticket a
@@ -215,12 +209,17 @@ module Catches
           @notify_owner = true
           # Hand over the rows resolved for the locks above rather than have
           # PlaceInSlots run ActiveForUser again while holding them.
-          placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
-          # A fish DQ'd before the draw and reinstated after it was never in
-          # the pool: it comes back with no ticket, and the caller says so.
-          @ticket_withheld = placed[:withheld].any?
+          place!(rows: reachable_rows)
         end
         after = snapshot
+        # The drawn winner's ticket can be retired here (a DQ, a species
+        # change to plain walleye): the draw is void until an organizer
+        # re-draws, and the caller must say so. Read after the change, so a
+        # reinstate that re-issues the pool ticket (and repoints the winner)
+        # reports nothing. Voided only for a tournament whose recorded winner
+        # is one of THIS catch's rows: retiring any other ticket voids nothing.
+        @draw_voided = ::Tournament.where(drawn_winning_placement_id: @catch.catch_placements.select(:id))
+                                   .any?(&:drawn_winner_voided?)
 
         JudgeAction.create!(
           judge_user: @judge, catch: @catch, action: @action, note: @note,
@@ -262,8 +261,11 @@ module Catches
 
       # ticket_withheld: a re-placement reached a tagged tournament whose draw
       # had already run, so the catch's tag saved but no ticket was issued (a
-      # tag added to a stranded Tagged Walleye, or a species change to one).
-      { ticket_withheld: @ticket_withheld }
+      # tag added to a stranded Tagged Walleye, a species change to one, or a
+      # fish DQ'd before the draw and reinstated after it).
+      # draw_voided: this catch was the drawn winner and no longer holds a
+      # ticket. CatchUpdateNotice turns both into the flash.
+      { ticket_withheld: @ticket_withheld, draw_voided: @draw_voided }
     end
 
     private
@@ -375,13 +377,21 @@ module Catches
       freed.each { |p| ::Catches::ReconcileFreedSlot.call(placement: p) }
       # lock_touched_entries! already resolved reachable_rows; hand them over
       # rather than have PlaceInSlots look them up again under the locks.
-      placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
-      # A ticket the draw drew from is re-issued by PlaceInSlots, which also
-      # repoints the recorded winner at the new row. Only the "no ticket"
-      # signal comes back here: a species change to Tagged Walleye after the
-      # draw, or a fish the draw never saw (a DQ undone after it), saves but
-      # earns none. Same signal the tag-add branch reports.
-      @ticket_withheld = placed[:withheld].any?
+      place!(rows: reachable_rows)
+    end
+
+    # Every re-placement this service runs goes through here, inside the
+    # transaction with the entry locks held. PlaceInSlots reports the
+    # tournaments where the draw alone kept it from minting a ticket (a
+    # ticket the draw drew from is re-issued, and the recorded winner
+    # repointed, by PlaceInSlots itself). The catch still saves, so the
+    # signal is kept for the caller: the organizer otherwise sees "Catch
+    # updated." and assumes a ticket. Any other reason for no ticket (a DQ'd
+    # catch, no scoring slot) is not the draw's doing and is not reported.
+    def place!(**opts)
+      placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, **opts)
+      @ticket_withheld ||= placed[:withheld].any?
+      placed
     end
 
     def snapshot

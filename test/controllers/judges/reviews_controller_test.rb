@@ -68,4 +68,32 @@ class Judges::ReviewsControllerTest < ActionDispatch::IntegrationTest
     token = SignInToken.issue!(user: user)
     get consume_session_path(token: token.token)
   end
+
+  test "POST disqualify on the drawn winner says the draw is void" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    create(:tournament_judge, tournament: t, user: @judge)
+    angler = create(:user, club: @club)
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: angler)
+    winner = create(:catch, user: angler, species: tagged, length_inches: 19.0,
+                    tag_number: "A0001", captured_at_device: 2.hours.ago)
+    Catches::PlaceInSlots.call(catch: winner)
+    Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @judge)
+    get judges_tournament_catch_path(tournament_id: t.id, id: winner.id)  # consume the sign-in flash
+
+    post judges_tournament_catch_review_path(tournament_id: t.id, catch_id: winner.id),
+         params: { action_kind: "disqualify", note: "bad photo" }
+    assert_redirected_to judges_tournament_catch_path(tournament_id: t.id, id: winner.id)
+    assert t.reload.drawn_winner_voided?
+    assert_match(/draw is void/, flash[:notice])
+    follow_redirect!
+
+    post judges_tournament_catch_review_path(tournament_id: @t.id, catch_id: @catch.id),
+         params: { action_kind: "approve", note: "ok" }
+    assert_nil flash[:notice], "an ordinary decision still redirects with no flash"
+  end
 end

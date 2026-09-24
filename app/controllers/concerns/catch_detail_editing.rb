@@ -36,7 +36,7 @@ module CatchDetailEditing
       tag_number: params[:tag_number],
       club: current_club
     )
-    redirect_to url_for(action: :show, id: @catch.id), notice: catch_updated_notice(result)
+    redirect_to url_for(action: :show, id: @catch.id), notice: catch_change_notice(result, saved: "Catch updated.")
   end
 
   private

@@ -41,10 +41,7 @@ module Tournaments
         raise NotEndedError,    "tournament has not yet ended"                       unless @tournament.ended?
         raise AlreadyDrawnError, "already drawn (pass force: true to redraw)" if @tournament.drawn_at.present? && !@force
 
-        eligible = @tournament.catch_placements
-                              .where(active: true)
-                              .includes(catch: :user)
-                              .to_a
+        eligible = @tournament.draw_pool.includes(catch: :user).to_a
         raise NoEligibleCatchesError, "no tagged catches to draw from" if eligible.empty?
 
         # SecureRandom (CSPRNG) rather than Array#sample (MT19937) so the draw
@@ -54,9 +51,11 @@ module Tournaments
         # it to decide whether a post-draw re-placement re-issues a ticket
         # (the fish was in the draw) or earns none (it was not). A forced
         # re-draw runs over the tickets active NOW, so the flag means "in the
-        # most recent draw": clear it before stamping.
-        @tournament.catch_placements.where(in_draw_pool: true).update_all(in_draw_pool: false)
-        CatchPlacement.where(id: eligible.map(&:id)).update_all(in_draw_pool: true)
+        # most recent draw": rows stamped by an earlier draw and since
+        # retired lose it. Under the locks above the active set IS
+        # `eligible`, so one statement over the rows whose stamp is wrong
+        # does both, keeping the lock-held write short.
+        @tournament.catch_placements.where("in_draw_pool <> active").update_all("in_draw_pool = active")
         @tournament.update!(
           drawn_winning_placement_id: winner.id,
           drawn_at: Time.current,

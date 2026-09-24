@@ -101,6 +101,22 @@ module Tournaments
       assert_not retired.reload.in_draw_pool, "a ticket pulled before the draw was never in the pool"
     end
 
+    test "draws from Tournament#draw_pool, the scope the re-draw button reads" do
+      ticket = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
+                      tag_number: "A001", captured_at_device: 90.minutes.ago)
+      )[:created].first
+      assert_equal [ticket.id], @t.draw_pool.pluck(:id)
+      assert @t.tickets_remain?
+
+      CatchPlacement.where(id: ticket.id).deactivate_all
+      assert_empty @t.draw_pool
+      assert_not @t.tickets_remain?, "the views offer no re-draw the service would refuse"
+      assert_raises(DrawTaggedWinner::NoEligibleCatchesError) do
+        DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+      end
+    end
+
     test "serializes on the tournament's entries, the lock every ticket writer holds" do
       Catches::PlaceInSlots.call(
         catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,

@@ -1574,5 +1574,64 @@ module Catches
       assert_equal "A0042", dq.reload.tag_number
       assert_not result[:ticket_withheld], "a DQ'd catch earns no ticket regardless of the draw"
     end
+
+    # A drawn tagged tournament with the winner and one other ticket; the
+    # winner's fish is returned so the test can retire or restore its ticket.
+    def drawn_tagged_tournament
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      other = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                     tag_number: "A0002", captured_at_device: 100.minutes.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      Catches::PlaceInSlots.call(catch: other)
+      t.reload
+      t.update_columns(drawn_winning_placement_id: CatchPlacement.find_by!(tournament: t, catch: winner, active: true).id,
+                       drawn_at: Time.current)
+      CatchPlacement.where(tournament: t).update_all(in_draw_pool: true)
+      [t, winner, other]
+    end
+
+    test "disqualify on the drawn winner reports the draw as voided" do
+      t, winner, other = drawn_tagged_tournament
+
+      result = ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :disqualify, note: "dq")
+
+      assert t.reload.drawn_winner_voided?
+      assert result[:draw_voided], "the judge must hear the draw is void, not a bare redirect"
+      assert_not result[:ticket_withheld]
+
+      result = ApplyJudgeAction.call(tournament: t, catch: other, judge: @judge, action: :disqualify, note: "dq")
+      assert_not result[:draw_voided], "retiring a losing ticket voids nothing"
+    end
+
+    test "manual_override species change away from Tagged Walleye on the drawn winner reports the draw as voided" do
+      t, winner, _other = drawn_tagged_tournament
+
+      result = ApplyJudgeAction.call(tournament: nil, catch: winner, judge: @judge, action: :manual_override,
+                                     species_id: @walleye.id, tag_number: "", note: "mis-ID", club: @club)
+
+      assert_equal @walleye, winner.reload.species
+      assert t.reload.drawn_winner_voided?
+      assert result[:draw_voided]
+      assert_not result[:ticket_withheld], "PlaceInSlots never reached the tagged branch, so nothing was withheld"
+    end
+
+    test "reinstating the drawn winner after a post-draw DQ restores the draw and reports nothing" do
+      t, winner, _other = drawn_tagged_tournament
+      ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :disqualify, note: "dq")
+
+      result = ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :reinstate, note: "undo")
+
+      assert_not t.reload.drawn_winner_voided?, "the pool ticket is re-issued and the winner repointed"
+      assert_not result[:draw_voided]
+      assert_not result[:ticket_withheld]
+    end
   end
 end

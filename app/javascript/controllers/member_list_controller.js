@@ -29,13 +29,10 @@ export default class extends Controller {
       row.hidden = needle !== "" && !row.dataset.name.toLowerCase().includes(needle)
       this.listTarget.appendChild(row)
     })
+    // The pressed styling is the partial's aria-pressed: variant, so the
+    // attribute is the only thing to flip.
     this.sortButtonTargets.forEach((button) => {
-      const active = button.dataset.sort === this.sortValue
-      button.setAttribute("aria-pressed", active ? "true" : "false")
-      button.classList.toggle("bg-blue-600", active)
-      button.classList.toggle("text-white", active)
-      button.classList.toggle("bg-slate-700", !active)
-      button.classList.toggle("text-slate-300", !active)
+      button.setAttribute("aria-pressed", button.dataset.sort === this.sortValue ? "true" : "false")
     })
   }
 

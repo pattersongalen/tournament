@@ -41,6 +41,29 @@ class CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "4 lbs 3oz", persisted.weight_text, "weight_text is permitted"
   end
 
+  test "POST /catches after the draw logs the catch and says no ticket was issued" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: @user)
+    t.update_columns(drawn_at: 30.minutes.ago)
+
+    # Logged during the night, synced after the organizer drew the winner.
+    post catches_path, params: {
+      catch: { species_id: tagged.id, length_inches: 18.5, captured_at_device: 2.hours.ago,
+               client_uuid: "client-late", tag_number: "A0009",
+               photo: fixture_file_upload("sample_walleye.jpg", "image/jpeg") }
+    }
+    assert_redirected_to root_path
+    assert_match(/no ticket was issued/, flash[:notice])
+    late = Catch.find_by!(client_uuid: "client-late")
+    assert_equal 0, late.catch_placements.active.count
+    assert_includes late.flags, "no_draw_ticket"
+  end
+
   test "POST /catches persists flags and status derived from the submitted GPS" do
     now = Time.current
     # The two rows are more than the 90s duplicate window apart so the second

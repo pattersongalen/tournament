@@ -192,7 +192,8 @@ module CatchesHelper
     "out_of_province"    => "outside Saskatchewan",
     "possible_duplicate" => "possible duplicate",
     "imported_photo"     => "imported photo",
-    "screenshot_suspect" => "possible screenshot"
+    "screenshot_suspect" => "possible screenshot",
+    "no_draw_ticket"     => "no draw ticket"
   }.freeze
 
   def flag_label(flag)

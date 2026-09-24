@@ -25,7 +25,7 @@ class Judges::CatchesController < Judges::BaseController
       override_in_lake: params[:override_in_lake] == "1",
       override_in_sask: params[:override_in_sask] == "1"
     )
-    redirect_to_catch(notice: ticket_withheld_notice(result))
+    redirect_to_catch(notice: catch_change_notice(result))
   end
 
   def correct_location
@@ -34,7 +34,7 @@ class Judges::CatchesController < Judges::BaseController
       action: :correct_location, note: params[:note],
       latitude: params[:latitude], longitude: params[:longitude]
     )
-    redirect_to_catch(notice: ticket_withheld_notice(result))
+    redirect_to_catch(notice: catch_change_notice(result))
   end
 
   def reinstate
@@ -44,7 +44,7 @@ class Judges::CatchesController < Judges::BaseController
     result = Catches::ApplyJudgeAction.call(
       tournament: @tournament, catch: @catch, judge: current_user, action: :reinstate, note: params[:note]
     )
-    redirect_to_catch(notice: ticket_withheld_notice(result))
+    redirect_to_catch(notice: catch_change_notice(result))
   end
 
   private

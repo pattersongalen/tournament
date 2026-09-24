@@ -185,6 +185,14 @@ module Catches
                     CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id, in_draw_pool: true).arel.exists)
             if drawn && !in_pool
               withheld << tournament.id
+              # The member's own submission path (the API sync, the web form)
+              # reads nothing off the result, so the catch itself says it
+              # earned no ticket: a member-visible flag on the catch list and
+              # detail page, so a fish that synced after the draw isn't a
+              # tagged catch that silently never reached the leaderboard.
+              # Informational: no bump to review. Guarded UPDATE, so a re-run
+              # (a judge re-placement, the API's dedup retry) adds it once.
+              @catch.add_flag!("no_draw_ticket")
               next
             end
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1

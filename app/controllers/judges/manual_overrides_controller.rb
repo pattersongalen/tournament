@@ -23,7 +23,7 @@ class Judges::ManualOverridesController < Judges::BaseController
       club: @tournament.club
     )
     redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id),
-                notice: catch_updated_notice(result)
+                notice: catch_change_notice(result, saved: "Catch updated.")
   rescue Catches::ApplyJudgeAction::ForceSlotUnsupported
     redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id),
                 alert: "Forcing a catch into a slot isn't supported for this tournament format."

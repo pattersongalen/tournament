@@ -1,25 +1,23 @@
-# The flash for a catch edit that went through Catches::ApplyJudgeAction's
-# manual_override. Shared by the organizer/admin catch editor and the judge
-# override form so the wording can't drift between them.
+# The flash for a catch change that went through Catches::ApplyJudgeAction.
+# Shared by the organizer/admin catch editor, the judge override form, the
+# judge review decisions and the judge correction flows so the wording can't
+# drift between them.
 module CatchUpdateNotice
   extend ActiveSupport::Concern
 
   private
 
-  # A tag added after the draw saves but earns no ticket (the pool closed at
-  # the draw); say so rather than let "Catch updated." imply one was issued.
-  def catch_updated_notice(result)
-    return "Catch updated." unless result[:ticket_withheld]
-    "Tag saved. The draw already ran, so no ticket was issued for this catch."
-  end
-
-  # The correction flows (reinstate, GPS fix, geofence override) re-place the
-  # catch; after the draw that only re-issues a ticket the draw drew from. A
-  # fish the draw never saw (a DQ undone after it) comes back with no ticket,
-  # and the judge must hear that rather than a bare redirect. nil when there
-  # is nothing to say, so the redirect sets no flash.
-  def ticket_withheld_notice(result)
-    return nil unless result[:ticket_withheld]
-    "Change applied. The draw already ran and this fish was not in it, so no ticket was issued."
+  # `saved` is the flash for a plain success ("Catch updated."); the
+  # correction and review flows pass nothing and redirect with no flash
+  # when there is nothing to say. The draw's two consequences are appended
+  # so the organizer never reads a bare success and assumes a ticket:
+  # a re-placement after the draw for a fish the draw never saw earns no
+  # ticket, and retiring the drawn winner's ticket voids the draw.
+  def catch_change_notice(result, saved: nil)
+    notes = []
+    notes << "The draw already ran and this fish was not in it, so no ticket was issued." if result[:ticket_withheld]
+    notes << "This fish was the drawn winner and no longer holds a ticket, so the draw is void until an organizer re-draws." if result[:draw_voided]
+    return saved if notes.empty?
+    [saved, *notes].compact.join(" ")
   end
 end

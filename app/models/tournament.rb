@@ -91,11 +91,18 @@ class Tournament < ApplicationRecord
     winner.present? && !catch_placements.active.exists?(catch_id: winner.catch_id)
   end
 
-  # Whether a re-draw has anything to run over. With no active ticket the
-  # draw service refuses, so the views offer nothing rather than a button
-  # that fails.
+  # The tickets a draw runs over: every active placement. The one definition
+  # Tournaments::DrawTaggedWinner draws from and the views' "re-draw" offer
+  # reads, so the button can't be shown for a pool the draw would refuse.
+  def draw_pool
+    catch_placements.active
+  end
+
+  # Whether a re-draw has anything to run over. With an empty pool the draw
+  # service refuses, so the views offer nothing rather than a button that
+  # fails.
   def tickets_remain?
-    catch_placements.active.exists?
+    draw_pool.exists?
   end
 
   # After the drawn winner's ticket is retired and re-issued as a new row (a

@@ -1071,6 +1071,14 @@ module Catches
     assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
                  "a fish that was out of the pool when the winner was drawn must not get a ticket now"
     assert_empty result[:affected_tournaments]
+    assert_equal [t.id], result[:withheld]
+    # The member's own submission path reads nothing off the result, so the
+    # catch itself must say it earned no ticket: a member-visible flag.
+    assert_includes fish.reload.flags, "no_draw_ticket"
+    assert_not fish.needs_review?, "an informational flag, not a review trigger"
+
+    PlaceInSlots.call(catch: fish)
+    assert_equal 1, fish.reload.flags.count("no_draw_ticket"), "add_flag! is idempotent across re-runs"
   end
 
   test "tagged: new catch after a placement is deactivated does not collide on slot_index" do

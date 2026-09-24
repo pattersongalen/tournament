@@ -23,16 +23,31 @@ class AddInDrawPoolToCatchPlacements < ActiveRecord::Migration[8.0]
   # Whether a retired row was still active at the draw can't be read off
   # updated_at: every retirement before this column was a bare update_all,
   # which leaves the stamp at creation time. The JudgeAction audit trail
-  # can say it. Its before/after snapshots list the catch's active
-  # (entry, slot) pairs, so a judge action recorded at or after the draw
-  # whose snapshots show this row going active -> inactive retired it after
-  # the draw: the row was in the pool. Only that positive evidence stamps a
-  # retired row. A retirement with no audit row (a member dropped from a
-  # boat) could have happened on either side of the draw, and a stamp is
-  # read: the late-entrant backfill re-places a re-added member's fish and
-  # would mint a live ticket for one the draw never saw. Left unstamped, a
-  # fish that WAS in the draw and is re-placed later earns no ticket and
-  # says so (the withheld-ticket notice), which is the recoverable error.
+  # can say it. Its before snapshot lists the catch's active (entry, slot)
+  # pairs at that moment, so the FIRST judge action on the catch at or after
+  # the draw whose before snapshot lists this row's pair saw it still active
+  # at or after the draw: the row was in the pool. A row is never
+  # reactivated, so "active at a later moment" implies "active at the draw".
+  #
+  # Only the first post-draw action can speak. A pair identifies a slot, not
+  # a row: a re-issue (a GPS fix on an entry's only fish) retires the row
+  # and mints its replacement at the same slot index, so a later action's
+  # snapshot lists the pair for the replacement, which may have been minted
+  # after the draw for a fish the draw never saw (a pre-draw DQ reinstated
+  # after it). Matching the first action instead means the pair it lists is
+  # the row that was active when the pool closed (or one minted since, for a
+  # fish that already had its pre-draw row retired: that fish's first
+  # post-draw action then shows the mint, an empty before snapshot). The
+  # after snapshot says nothing: a same-slot re-issue lists the pair on both
+  # sides, and reading it as "still active" would leave a drawn winner's
+  # pool row unstamped, so its next correction would void the draw.
+  #
+  # A retirement with no audit row (a member dropped from a boat) could have
+  # happened on either side of the draw, and a stamp is read: the
+  # late-entrant backfill re-places a re-added member's fish and would mint a
+  # live ticket for one the draw never saw. Left unstamped, a fish that WAS
+  # in the draw and is re-placed later earns no ticket and says so (the
+  # withheld-ticket notice), which is the recoverable error.
   def backfill_draw_pool
     execute <<~SQL
       UPDATE catch_placements cp
@@ -44,13 +59,14 @@ class AddInDrawPoolToCatchPlacements < ActiveRecord::Migration[8.0]
          AND (cp.active OR EXISTS (
                SELECT 1
                  FROM judge_actions ja
-                WHERE ja.catch_id = cp.catch_id
-                  AND ja.created_at >= cp.created_at
-                  AND ja.created_at >= t.drawn_at
+                WHERE ja.id = (SELECT earliest.id
+                                 FROM judge_actions earliest
+                                WHERE earliest.catch_id = cp.catch_id
+                                  AND earliest.created_at >= t.drawn_at
+                                ORDER BY earliest.created_at, earliest.id
+                                LIMIT 1)
                   AND EXISTS (SELECT 1 FROM jsonb_array_elements(ja.before_state -> 'active_placements') b
                                WHERE b = jsonb_build_array(cp.tournament_entry_id, cp.slot_index))
-                  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(ja.after_state -> 'active_placements') a
-                                   WHERE a = jsonb_build_array(cp.tournament_entry_id, cp.slot_index))
              ))
     SQL
   end

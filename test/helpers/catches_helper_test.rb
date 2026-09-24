@@ -67,7 +67,8 @@ class CatchesHelperTest < ActionView::TestCase
   test "flag_label renders known flags with friendly text" do
     {
       "out_of_province"    => "outside Saskatchewan",
-      "screenshot_suspect" => "possible screenshot"
+      "screenshot_suspect" => "possible screenshot",
+      "no_draw_ticket"     => "no draw ticket"
     }.each do |flag, label_text|
       assert_equal label_text, flag_label(flag), flag
     end

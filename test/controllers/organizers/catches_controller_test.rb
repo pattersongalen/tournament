@@ -155,6 +155,29 @@ class Organizers::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "X1795", fish.reload.tag_number
   end
 
+  test "changing the drawn winner's species away from Tagged Walleye says the draw is void" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    walleye = Species.find_or_create_by!(name: "Walleye")
+    t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: @member)
+    drawn = create(:catch, user: @member, species: tagged, length_inches: 19.0,
+                   tag_number: "A0001", captured_at_device: 2.hours.ago)
+    Catches::PlaceInSlots.call(catch: drawn)
+    Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @organizer)
+
+    sign_in_as(@organizer)
+    patch organizers_catch_path(drawn.id), params: {
+      species_id: walleye.id, length: "19", length_unit: "inches", tag_number: "", note: "mis-ID"
+    }
+    assert_redirected_to organizers_catch_path(drawn.id)
+    assert_equal walleye, drawn.reload.species
+    assert_match(/Catch updated\..*draw is void/, flash[:notice])
+  end
+
   test "adding a tag after the draw says no ticket was issued" do
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")
     t = build(:tournament, club: @club, format: :tagged, mode: :solo,
