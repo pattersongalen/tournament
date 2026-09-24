@@ -85,6 +85,14 @@ module Catches
           attrs.merge!({ length_inches: @length_inches, length_unit: @length_unit }.compact) if @length_inches && (length_changed || unit_changed)
           attrs[:species_id] = @species_id if species_changed
           attrs[:tag_number] = new_tag if tag_changed
+          # A tag only means something on a Tagged Walleye. The editor leaves
+          # the field populated across a species change (it stays visible so an
+          # organizer can see what's there), so a change away from Tagged
+          # Walleye drops the tag itself rather than leaving a plain Walleye
+          # wearing one for good.
+          if species_changed && prior_tag && !::Species.find(@species_id).tagged_walleye?
+            attrs[:tag_number] = nil
+          end
           if attrs.any?
             @catch.update!(attrs)
             @notify_owner = true

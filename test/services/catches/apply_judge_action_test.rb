@@ -84,6 +84,17 @@ module Catches
       end
     end
 
+    test "a species change away from Tagged Walleye drops the tag even when the form leaves it in place" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 19, tag_number: "A0001",
+                    status: :needs_review)
+      Catches::ApplyJudgeAction.call(
+        tournament: @t, catch: fish, judge: @judge, action: :manual_override,
+        note: "mis-ID", species_id: @walleye.id, tag_number: "A0001"
+      )
+      assert_nil fish.reload.tag_number, "a tag only means something on a Tagged Walleye"
+    end
+
     test "snapshot reuses the loaded species across before/after instead of re-querying" do
       # The before/after snapshots should share one species read (the memoized
       # association) rather than each issuing its own Species.find_by. The lone

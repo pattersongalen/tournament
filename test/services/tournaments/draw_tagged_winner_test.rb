@@ -57,6 +57,24 @@ module Tournaments
       end
     end
 
+    test "a precondition failure takes no row locks" do
+      # The entry locks block every live PlaceInSlots on the tournament, so a
+      # mis-tap on a running (or non-tagged) tournament must bounce off the
+      # guards before it queues anyone's catch behind a lock it only rolls back.
+      @t.update_columns(starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      locks = []
+      probe = ->(_name, _start, _finish, _id, payload) do
+        sql = payload[:sql].to_s
+        locks << sql if sql.include?("FOR UPDATE")
+      end
+      ActiveSupport::Notifications.subscribed(probe, "sql.active_record") do
+        assert_raises(Tournaments::DrawTaggedWinner::NotEndedError) do
+          Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+        end
+      end
+      assert_empty locks, "a draw that fails its preconditions must not lock entries first"
+    end
+
     test "refuses a second draw without force" do
       Catches::PlaceInSlots.call(
         catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,

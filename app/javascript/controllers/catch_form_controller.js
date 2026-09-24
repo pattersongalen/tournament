@@ -55,6 +55,13 @@ export default class extends Controller {
   refresh() {
     const isTagged = this._isTaggedSpecies()
     if (this.hasTagWrapperTarget) this.tagWrapperTarget.classList.toggle("hidden", !isTagged)
+    // The submit reads the tag and weight inputs whether or not they show, so
+    // a tag typed for Tagged Walleye and then hidden by a species switch would
+    // ride along on a plain Walleye. Clear them with the wrapper.
+    if (!isTagged) {
+      if (this.hasTagInputTarget) this.tagInputTarget.value = ""
+      if (this.hasWeightInputTarget) this.weightInputTarget.value = ""
+    }
     this.statusTarget.textContent = this._missingFieldMessage() ?? ""
   }
 

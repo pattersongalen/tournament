@@ -20,6 +20,16 @@ module Tournaments
     end
 
     def call
+      # Format and end time are checked before any lock is taken: the entry
+      # locks below stall every live PlaceInSlots on this tournament, and a
+      # mis-tap on a running or non-tagged tournament would queue those
+      # placements behind a lock the raise only rolls back. The format is
+      # locked once the tournament starts, so that read is final; the end
+      # time can still be pushed out by an edit, so it is read again under
+      # the lock below.
+      raise WrongFormatError, "tournament format is not 'tagged'" unless @tournament.format_tagged?
+      raise NotEndedError,    "tournament has not yet ended"      unless @tournament.ended?
+
       winning_placement = ActiveRecord::Base.transaction do
         # Serialize on the tournament's entries first, then the tournament
         # row. Every writer of a ticket (PlaceInSlots, the judge flows) holds
@@ -37,8 +47,7 @@ module Tournaments
         # seen and a second tap can't draw twice.
         @tournament.tournament_entries.order(:id).lock.pluck(:id)
         @tournament.lock!
-        raise WrongFormatError, "tournament format is not 'tagged'"                  unless @tournament.format_tagged?
-        raise NotEndedError,    "tournament has not yet ended"                       unless @tournament.ended?
+        raise NotEndedError,     "tournament has not yet ended" unless @tournament.ended?
         raise AlreadyDrawnError, "already drawn (pass force: true to redraw)" if @tournament.drawn_at.present? && !@force
 
         eligible = @tournament.draw_pool.includes(catch: :user).to_a
