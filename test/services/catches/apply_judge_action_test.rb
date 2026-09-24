@@ -1623,6 +1623,20 @@ module Catches
       assert_not result[:ticket_withheld], "PlaceInSlots never reached the tagged branch, so nothing was withheld"
     end
 
+    test "an action on the already-voided winner that retires nothing reports no void" do
+      t, winner, _other = drawn_tagged_tournament
+      ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :disqualify, note: "dq")
+      assert t.reload.drawn_winner_voided?
+
+      result = ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :flag, note: "look again")
+      assert_not result[:draw_voided], "the draw was void before this flag; the flag did not void it"
+
+      result = ApplyJudgeAction.call(tournament: nil, catch: winner, judge: @judge, action: :manual_override,
+                                     length_inches: 19.5, note: "re-measured", club: @club)
+      assert_not result[:draw_voided], "a length fix on the voided winner retires nothing"
+      assert t.reload.drawn_winner_voided?, "and the draw stays void"
+    end
+
     test "reinstating the drawn winner after a post-draw DQ restores the draw and reports nothing" do
       t, winner, _other = drawn_tagged_tournament
       ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :disqualify, note: "dq")

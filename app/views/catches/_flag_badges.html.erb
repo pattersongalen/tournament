@@ -1,6 +1,19 @@
-<% visible_flags_for(catch_record).each do |flag| %>
-  <span class="inline-block px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 text-xs mr-1"><%= flag_label(flag) %></span>
+<%# Locals: catch_record. Every status cell that has a flag or an approval
+    to show renders this. Review flags wear amber: each one is a reason a
+    judge looks at the catch, so they stand in for the "needs review" label.
+    Informational flags (CatchesHelper::INFO_FLAGS) wear slate and stand in
+    for nothing: a catch whose only flag is informational still says
+    "needs review" when a judge has flagged it. %>
+<% review_flags = review_flags_for(catch_record) %>
+<% review_flags.each do |flag| %>
+  <span data-flag="<%= flag %>" class="inline-block px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 text-xs mr-1"><%= flag_label(flag) %></span>
+<% end %>
+<% if review_flags.empty? && catch_record.needs_review? %>
+  <span class="text-amber-400">needs review</span>
 <% end %>
 <% if (approver = catch_record.latest_approver) %>
   <span class="inline-block px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 text-xs mr-1">Approved by <%= approver.name %></span>
+<% end %>
+<% info_flags_for(catch_record).each do |flag| %>
+  <span data-flag="<%= flag %>" class="inline-block px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 text-xs mr-1"><%= flag_label(flag) %></span>
 <% end %>

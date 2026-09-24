@@ -45,6 +45,7 @@ module Catches
       ActiveRecord::Base.transaction do
         @catch.lock!  # serialize with PlaceInSlots on the same catch
         before = snapshot
+        voided_before = can_retire_ticket? && draw_voided_by_this_catch?
         case @action
         when :approve, :dock_verify
           @catch.update!(status: :synced)
@@ -214,12 +215,13 @@ module Catches
         after = snapshot
         # The drawn winner's ticket can be retired here (a DQ, a species
         # change to plain walleye): the draw is void until an organizer
-        # re-draws, and the caller must say so. Read after the change, so a
-        # reinstate that re-issues the pool ticket (and repoints the winner)
-        # reports nothing. Voided only for a tournament whose recorded winner
-        # is one of THIS catch's rows: retiring any other ticket voids nothing.
-        @draw_voided = ::Tournament.where(drawn_winning_placement_id: @catch.catch_placements.select(:id))
-                                   .any?(&:drawn_winner_voided?)
+        # re-draws, and the caller must say so. Reported only when THIS action
+        # voided it: read before and after the change, so a flag, an approval
+        # or a length fix on an already-voided winner (void before, void
+        # after) reports nothing, and a reinstate that re-issues the pool
+        # ticket (and repoints the winner) reports nothing either. Actions
+        # that can't retire a row skip both reads.
+        @draw_voided = can_retire_ticket? && !voided_before && draw_voided_by_this_catch?
 
         JudgeAction.create!(
           judge_user: @judge, catch: @catch, action: @action, note: @note,
@@ -269,6 +271,23 @@ module Catches
     end
 
     private
+
+    # The actions that can retire one of this catch's placements: a DQ frees
+    # them all, the three rebuild paths deactivate and re-place. The rest
+    # (approve, flag, dock_verify, add_reference_photo, reinstate) create or
+    # touch no row, so the draw can't go void under them.
+    RETIRING_ACTIONS = %i[disqualify manual_override geofence_override correct_location].freeze
+
+    def can_retire_ticket?
+      RETIRING_ACTIONS.include?(@action)
+    end
+
+    # Voided only for a tournament whose recorded winner is one of THIS
+    # catch's rows: retiring any other ticket voids nothing.
+    def draw_voided_by_this_catch?
+      ::Tournament.where(drawn_winning_placement_id: @catch.catch_placements.select(:id))
+                  .any?(&:drawn_winner_voided?)
+    end
 
     # For a bingo tournament, the only card this edit changes is the one the catch's
     # owner belongs to — return its entry id(s) so BroadcastLeaderboard rebroadcasts
@@ -381,15 +400,18 @@ module Catches
     end
 
     # Every re-placement this service runs goes through here, inside the
-    # transaction with the entry locks held. PlaceInSlots reports the
+    # transaction with the entry locks held. Every caller hands over rows:
+    # already narrowed to the editing club by reachable_rows, so club: is
+    # not passed again — one filter, in one place, decides the scope both the
+    # entry locks and the placement run see. PlaceInSlots reports the
     # tournaments where the draw alone kept it from minting a ticket (a
     # ticket the draw drew from is re-issued, and the recorded winner
     # repointed, by PlaceInSlots itself). The catch still saves, so the
     # signal is kept for the caller: the organizer otherwise sees "Catch
     # updated." and assumes a ticket. Any other reason for no ticket (a DQ'd
     # catch, no scoring slot) is not the draw's doing and is not reported.
-    def place!(**opts)
-      placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, **opts)
+    def place!(rows:, **opts)
+      placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, rows: rows, **opts)
       @ticket_withheld ||= placed[:withheld].any?
       placed
     end

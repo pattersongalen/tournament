@@ -131,6 +131,23 @@ class Organizers::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_response :not_found
   end
 
+  test "index shows an informational flag in its own style and never hides a needs-review state" do
+    sign_in_as(@organizer)
+    create(:catch, user: @member, flags: %w[no_draw_ticket], status: :synced,
+                   captured_at_device: 2.hours.ago)
+    flagged = create(:catch, user: @member, flags: %w[no_draw_ticket], status: :needs_review,
+                     captured_at_device: 1.hour.ago)
+
+    get organizers_catches_path
+    assert_response :success
+    assert_select "[data-flag='no_draw_ticket']", count: 2
+    assert_select "[data-flag='no_draw_ticket'].bg-amber-900\\/40", { count: 0 }, "informational, not a review badge"
+    cards = css_select("ul > li")
+    card_for = ->(c) { cards.find { |li| li.css("a[href='#{organizers_catch_path(c.id)}']").any? } }
+    assert_match(/needs review/, card_for.call(flagged).text, "the informational flag must not hide the review state")
+    assert_equal 1, cards.count { |li| li.text.include?("needs review") }, "only the judge-flagged catch needs review"
+  end
+
   test "index links each catch to its detail page" do
     sign_in_as(@organizer)
     get organizers_catches_path

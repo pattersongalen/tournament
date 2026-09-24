@@ -85,6 +85,13 @@ class CatchesHelperTest < ActionView::TestCase
     end
   end
 
+  test "review_flags_for and info_flags_for split the visible flags by whether they call for review" do
+    define_singleton_method(:can_review_catch?) { |_| true }
+    catch_record = Catch.new(flags: %w[no_draw_ticket missing_gps])
+    assert_equal %w[missing_gps], review_flags_for(catch_record)
+    assert_equal %w[no_draw_ticket], info_flags_for(catch_record)
+  end
+
   # --- JPEG-variant photo display helpers (iOS HEIC support) ---
 
   def attached_photo(path: "test/fixtures/files/sample_walleye.jpg", content_type: "image/jpeg", filename: "sample_walleye.jpg")

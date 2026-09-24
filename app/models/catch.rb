@@ -48,6 +48,15 @@ class Catch < ApplicationRecord
   # set, a still-synced catch is moved to needs_review in the same statement —
   # guarded on the *current* status so a concurrent judge decision is never
   # overwritten. Does not refresh this in-memory instance.
+  # One guarded UPDATE against the row's current flags, so two writers
+  # appending different flags never clobber each other and a repeat add is a
+  # no-op. The loaded instance is then brought in line with what the row now
+  # holds (the flag, and the status bump when the row took it), as a mirror
+  # of the write rather than a pending change: the API create response and
+  # the catch views read flags/status off this instance after placement, and
+  # a later save must not re-send them. Any flag the row already carried
+  # that this instance never loaded is deliberately left alone — the
+  # concurrent-writer guarantee is about the row, not the snapshot.
   def add_flag!(flag, bump_to_review: false)
     quoted = self.class.connection.quote(flag)
     set_sql = "flags = array_append(flags, #{quoted}::text)"
@@ -56,9 +65,13 @@ class Catch < ApplicationRecord
       review = self.class.statuses["needs_review"]
       set_sql += ", status = CASE WHEN status = #{synced} THEN #{review} ELSE status END"
     end
-    self.class.where(id: id)
-              .where.not("flags @> ARRAY[?]::text[]", flag)
-              .update_all(set_sql)
+    changed = self.class.where(id: id)
+                        .where.not("flags @> ARRAY[?]::text[]", flag)
+                        .update_all(set_sql)
+    write_attribute(:flags, Array(flags) | [flag])
+    write_attribute(:status, "needs_review") if changed == 1 && bump_to_review && synced?
+    clear_attribute_changes(%i[flags status])
+    changed
   end
 
   enum :status, {

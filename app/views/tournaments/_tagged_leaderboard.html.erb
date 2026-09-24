@@ -5,13 +5,15 @@
   # entry's display_name (matches the standard leaderboard partial).
   winner_placement = tournament.drawn_winning_placement if tournament.drawn_at.present?
   winner_catch     = winner_placement&.catch
-  winning_entry_id = winner_placement&.tournament_entry_id
   # Tournament#drawn_winner_voided? / #tickets_remain? hold the rules (shared
   # with the admin edit page); tickets_remain only matters once the draw is void.
   # Guarded on the winner resolved above: a recorded winner with no draw time
   # is no winner here, so it can't be a void one either.
   winner_void    = winner_placement.present? && tournament.drawn_winner_voided?
   tickets_remain = winner_void && tournament.tickets_remain?
+  # A void draw has no winner to highlight: the retired row still names an
+  # entry, but its row must not wear the winner colour under the void banner.
+  winning_entry_id = winner_placement&.tournament_entry_id unless winner_void
   can_draw    = current_user&.organizer_in?(tournament.club) && tournament.ended?
 %>
 <div id="leaderboard">

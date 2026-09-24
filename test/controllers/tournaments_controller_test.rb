@@ -809,6 +809,10 @@ class TournamentsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "#leaderboard", text: /no longer holds a ticket/
     assert_select "#leaderboard", text: /Winner\s+Tagged Angler/, count: 0
+    # The angler still holds A0002, so their row renders — without the winner
+    # highlight a void banner would contradict.
+    assert_select "#leaderboard tbody tr", count: 1
+    assert_select "#leaderboard tbody tr.bg-amber-900\\/20", count: 0
     assert_select "form[action=?]", draw_organizers_tournament_path(t, force: 1), count: 0
 
     delete session_path

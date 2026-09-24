@@ -37,6 +37,17 @@ class CatchTest < ActiveSupport::TestCase
     assert_equal %w[possible_duplicate imported_photo].sort, catch_record.reload.flags.sort
   end
 
+  test "add_flag! refreshes the loaded instance's flags and bumped status without dirtying it" do
+    catch_record = create(:catch, user: @user, species: @walleye, status: :synced)
+    catch_record.add_flag!("no_draw_ticket")
+    assert_equal ["no_draw_ticket"], catch_record.flags, "the instance reports the flag it just wrote"
+    assert catch_record.synced?
+    catch_record.add_flag!("imported_photo", bump_to_review: true)
+    assert_equal %w[no_draw_ticket imported_photo], catch_record.flags
+    assert catch_record.needs_review?, "the SQL status bump is mirrored on the instance"
+    assert_not catch_record.changed?, "mirroring the row is not a pending change"
+  end
+
   test "add_flag! with bump_to_review only moves a synced catch to needs_review" do
     { "synced" => "needs_review", "disqualified" => "disqualified" }.each do |start_status, expected|
       catch_record = create(:catch, user: @user, species: @walleye, status: start_status)
