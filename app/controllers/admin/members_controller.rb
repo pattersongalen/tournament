@@ -18,6 +18,10 @@ class Admin::MembersController < Admin::BaseController
     ).to_set
   end
 
+  def attendance
+    load_attendance
+  end
+
   def new
     @user = User.new
   end

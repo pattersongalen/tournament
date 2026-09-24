@@ -1,0 +1,28 @@
+<%= link_to "← Members", organizers_members_path, class: "text-sm text-blue-400" %>
+<h1 class="text-2xl font-semibold mt-2 mb-1">Attendance</h1>
+
+<% if @season_tag.nil? %>
+  <p class="text-slate-400 mt-4">No season configured yet, so there are no league nights to count.</p>
+<% else %>
+  <%# Mains only (Sides don't award points), counted from kickoff rather than
+      from the end of the night — one higher than the standings page during a
+      league night. %>
+  <p class="text-sm text-slate-400 mb-4"
+     title="League-night Mains entered this season, counted from the start of the night">
+    League-night Mains fished this season (<%= @season_tag %>)
+  </p>
+
+  <div data-controller="member-list">
+    <%= render "organizers/members/attendance_controls" %>
+    <ul class="space-y-2" data-member-list-target="list">
+      <% @rows.each do |user, nights| %>
+        <li class="bg-slate-800 rounded-lg px-4 py-3 flex items-center justify-between gap-3"
+            data-role="member" data-name="<%= user.name %>" data-nights="<%= nights %>"
+            data-member-list-target="row">
+          <strong><%= user.name %></strong>
+          <span class="font-mono text-lg"><%= nights %></span>
+        </li>
+      <% end %>
+    </ul>
+  </div>
+<% end %>

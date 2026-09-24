@@ -50,6 +50,9 @@ Rails.application.routes.draw do
       end
     end
     resources :members, only: [:index, :new, :create, :destroy] do
+      collection do
+        get :attendance
+      end
       member do
         post :reactivate
         post :issue_code
@@ -110,6 +113,9 @@ Rails.application.routes.draw do
       end
     end
     resources :members, only: [:index, :new, :create, :edit, :update, :destroy] do
+      collection do
+        get :attendance
+      end
       member do
         patch  :role
         post   :reactivate

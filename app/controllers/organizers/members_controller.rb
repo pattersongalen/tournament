@@ -8,6 +8,10 @@ class Organizers::MembersController < Organizers::BaseController
     load_members_roster
   end
 
+  def attendance
+    load_attendance
+  end
+
   def new
     @user = User.new
   end

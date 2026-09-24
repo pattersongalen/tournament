@@ -1,0 +1,42 @@
+<div class="flex items-center justify-between mb-8">
+  <div>
+    <%= link_to "← Members", admin_members_path, class: "text-sm text-blue-400" %>
+    <h1 class="text-3xl font-bold mt-1">Attendance</h1>
+  </div>
+</div>
+
+<% if @season_tag.nil? %>
+  <p class="text-slate-400">No season configured yet, so there are no league nights to count.</p>
+<% else %>
+  <%# Mains only (Sides don't award points), counted from kickoff rather than
+      from the end of the night — one higher than the standings page during a
+      league night. %>
+  <p class="text-sm text-slate-400 mb-4"
+     title="League-night Mains entered this season, counted from the start of the night">
+    League-night Mains fished this season (<%= @season_tag %>)
+  </p>
+
+  <div data-controller="member-list">
+    <%= render "organizers/members/attendance_controls" %>
+    <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+      <table class="w-full text-left border-collapse">
+        <thead>
+          <tr class="bg-slate-700/50 border-b border-slate-700">
+            <th class="px-6 py-4 text-sm font-semibold text-slate-300">Name</th>
+            <th class="px-6 py-4 text-sm font-semibold text-slate-300 text-right">Main nights</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-700" data-member-list-target="list">
+          <% @rows.each do |user, nights| %>
+            <tr class="hover:bg-slate-700/30 transition-colors"
+                data-role="member" data-name="<%= user.name %>" data-nights="<%= nights %>"
+                data-member-list-target="row">
+              <td class="px-6 py-4 font-medium text-slate-100"><%= user.name %></td>
+              <td class="px-6 py-4 font-mono text-right text-slate-100"><%= nights %></td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+<% end %>

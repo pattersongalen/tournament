@@ -311,23 +311,50 @@ class Admin::MembersControllerTest < ActionDispatch::IntegrationTest
     get consume_session_path(token: token.token)
   end
 
-  test "index shows each member's league-night Main count for the current season" do
-    night = create(:tournament, club: @club, mode: :team, awards_season_points: true, season_tag: "Wed 2026",
-                                starts_at: 1.week.ago, ends_at: 1.week.ago + 3.hours)
-    entry = create(:tournament_entry, tournament: night)
-    create(:tournament_entry_member, tournament_entry: entry, user: @member)
-
+  test "index links to the Attendance page instead of listing counts" do
+    create(:tournament, club: @club, awards_season_points: true, season_tag: "Wed 2026",
+                        starts_at: 1.week.ago, ends_at: 1.week.ago + 3.hours)
     sign_in_as(@organizer)
     get admin_members_path
     assert_response :success
-    assert_select "tr", text: /Old Name/ do
-      assert_select "td[data-role='main-nights']", text: "1"
-    end
+    assert_select "a[href='#{attendance_admin_members_path}']"
+    assert_select "th", text: "Main nights", count: 0
+    assert_select "td[data-role='main-nights']", count: 0
   end
+
+  test "attendance lists active members by Main nights this season, most first, and skips deactivated ones" do
+    zed  = create(:user, club: @club, role: :member, name: "Zed Zero")
+    gone = create(:user, club: @club, role: :member, name: "Gone Gary", deactivated_at: 1.day.ago)
+    2.times do |i|
+      night = create(:tournament, club: @club, mode: :team, awards_season_points: true, season_tag: "Wed 2026",
+                                  starts_at: (i + 1).weeks.ago, ends_at: (i + 1).weeks.ago + 3.hours)
+      entry = create(:tournament_entry, tournament: night)
+      create(:tournament_entry_member, tournament_entry: entry, user: @member)
+      create(:tournament_entry_member, tournament_entry: entry, user: gone)
+    end
+
+    sign_in_as(@organizer)
+    get attendance_admin_members_path
+    assert_response :success
+    names = css_select("tr[data-role='member']").map { |tr| tr["data-name"] }
+    assert_equal "Old Name", names.first
+    assert_select "tr[data-role='member'][data-name='Old Name'][data-nights='2']"
+    assert_select "tr[data-role='member'][data-name='Zed Zero'][data-nights='0']"
+    assert_select "tr[data-role='member'][data-name='Gone Gary']", count: 0
+    assert_equal names[1..].sort_by(&:downcase), names[1..], "ties on zero nights sort by name"
+  end
+
+  test "attendance says so when the club has no season" do
+    sign_in_as(@organizer)
+    get attendance_admin_members_path
+    assert_response :success
+    assert_select "tr[data-role='member']", count: 0
+    assert_match(/No season/i, response.body)
+  end
+
   test "index counts each member's tournament entries with one grouped query" do
-    # Season-points nights, so the Main-nights count (COUNT(DISTINCT ...) over the
-    # same join) also runs and the entries-count assertion below has to tell the
-    # two grouped counts apart rather than passing because only one exists.
+    # Season-points nights so the fixture matches a real league night; the
+    # Main-nights count now lives on its own page and does not run here.
     2.times do |i|
       t = create(:tournament, club: @club, awards_season_points: true, season_tag: "Wed 2026",
                  starts_at: (i + 1).weeks.ago, ends_at: (i + 1).weeks.ago + 3.hours)
@@ -339,24 +366,14 @@ class Admin::MembersControllerTest < ActionDispatch::IntegrationTest
     queries = []
     counter = ->(_name, _start, _finish, _id, payload) do
       sql = payload[:sql]
-      # The entries count is COUNT(*) over tournament_entry_members; the Main-nights
-      # count is COUNT(DISTINCT tournament_id) and is not what this test measures.
-      queries << sql if sql =~ /tournament_entry_members/i && sql =~ /COUNT\(\*\)/i
+      queries << sql if sql =~ /tournament_entry_members/i && sql =~ /COUNT/i
     end
     ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { get admin_members_path }
     assert_response :success
     assert_select "tr", text: /Old Name/ do
       assert_select "td[data-role='entries']", text: "2"
-      assert_select "td[data-role='main-nights']", text: "2"
     end
     assert_equal 1, queries.size, "expected one grouped entry count, got:\n#{queries.join("\n")}"
-  end
-  test "index hides the Main-nights column when the club has no season" do
-    sign_in_as(@organizer)
-    get admin_members_path
-    assert_response :success
-    assert_select "th", text: "Main nights", count: 0
-    assert_select "td[data-role='main-nights']", count: 0
   end
 
 end
