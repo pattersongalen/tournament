@@ -31,6 +31,10 @@ module Catches
 
     def call
       created, bumped = [], []
+      # Tournament ids where only a closed draw pool kept this catch from a
+      # ticket. ApplyJudgeAction turns it into the "no ticket was issued"
+      # notice; nothing else reads it.
+      withheld = []
       affected_tournaments = Set.new
       # Bingo only: the entry whose card this catch changes, keyed by tournament id,
       # so we rebroadcast just that angler's card rather than everyone's.
@@ -42,7 +46,7 @@ module Catches
       # placements at the same slot_index, corrupting the leaderboard.
       ActiveRecord::Base.transaction do
         @catch.lock!  # serialize with ApplyJudgeAction on the same catch
-        return { created: [], bumped: [], affected_tournaments: [], submitter: @catch.user } if @catch.disqualified?
+        return { created: [], bumped: [], withheld: [], affected_tournaments: [], submitter: @catch.user } if @catch.disqualified?
 
         # Tournament ids where this catch already holds an active placement.
         # A concurrent duplicate POST's dedup-reconcile can race the original
@@ -169,7 +173,10 @@ module Catches
             drawn   = ::Tournament.where(id: tournament.id).pick(:drawn_at).present?
             in_pool = drawn &&
               CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id, in_draw_pool: true).exists?
-            next if drawn && !in_pool
+            if drawn && !in_pool
+              withheld << tournament.id
+              next
+            end
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1
             created << CatchPlacement.create!(
               catch: @catch, tournament: tournament, tournament_entry: entry,
@@ -445,7 +452,8 @@ module Catches
       # leak pre-commit state to other DB connections) and will issue its own
       # broadcast after its outer transaction commits. We skip both the leaderboard
       # rebroadcast and the notification dispatch in that case.
-      result = { created: created, bumped: bumped, affected_tournaments: affected_tournaments.to_a, submitter: @catch.user }
+      result = { created: created, bumped: bumped, withheld: withheld,
+                 affected_tournaments: affected_tournaments.to_a, submitter: @catch.user }
 
       if @broadcast
         # Build each affected leaderboard once and share it with both the

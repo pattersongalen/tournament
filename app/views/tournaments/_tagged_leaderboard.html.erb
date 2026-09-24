@@ -8,7 +8,9 @@
   winning_entry_id = winner_placement&.tournament_entry_id
   # Tournament#drawn_winner_voided? / #tickets_remain? hold the rules (shared
   # with the admin edit page); tickets_remain only matters once the draw is void.
-  winner_void    = tournament.drawn_winner_voided?
+  # Guarded on the winner resolved above: a recorded winner with no draw time
+  # is no winner here, so it can't be a void one either.
+  winner_void    = winner_placement.present? && tournament.drawn_winner_voided?
   tickets_remain = winner_void && tournament.tickets_remain?
   can_draw    = current_user&.organizer_in?(tournament.club) && tournament.ended?
 %>

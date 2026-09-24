@@ -73,7 +73,7 @@ module Catches
         # idx_active_placements_uniq_per_slot on a row that shares the target slot.
         @entry.catch_placements
               .where(species_id: @species.id, active: true)
-              .update_all(active: false)
+              .deactivate_all
 
         eligible = eligible_catches
         return if eligible.empty?

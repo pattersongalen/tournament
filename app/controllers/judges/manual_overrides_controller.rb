@@ -1,5 +1,6 @@
 class Judges::ManualOverridesController < Judges::BaseController
   include LengthParamParsing
+  include CatchUpdateNotice
 
   before_action :load_catch!
 
@@ -21,9 +22,8 @@ class Judges::ManualOverridesController < Judges::BaseController
       # re-broadcasts another club's leaderboards (matches the organizer editor).
       club: @tournament.club
     )
-    # A tag added after the draw saves but earns no ticket; say so.
-    notice = "Tag saved. The draw already ran, so no ticket was issued for this catch." if result[:ticket_withheld]
-    redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id), notice: notice
+    redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id),
+                notice: catch_updated_notice(result)
   rescue Catches::ApplyJudgeAction::ForceSlotUnsupported
     redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id),
                 alert: "Forcing a catch into a slot isn't supported for this tournament format."

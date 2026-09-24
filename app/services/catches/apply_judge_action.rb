@@ -120,12 +120,12 @@ module Catches
               # above so nothing is looked up again under the row locks.
               placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows,
                                                     tournaments: tagged_rows.map { |r| r[:tournament] })
-              # PlaceInSlots deliberately mints nothing into a tournament whose
-              # draw already ran. The tag still saves, so tell the caller: the
-              # organizer otherwise sees "Catch updated." and assumes a ticket.
-              ticketed = placed[:created].map(&:tournament_id)
-              @ticket_withheld = ::Tournament.where(id: tagged_rows.map { |r| r[:tournament].id })
-                                             .where.not(drawn_at: nil).where.not(id: ticketed).exists?
+              # PlaceInSlots reports the tournaments where the draw alone kept
+              # it from minting a ticket. The tag still saves, so tell the
+              # caller: the organizer otherwise sees "Catch updated." and
+              # assumes a ticket. Any other reason for no ticket (a DQ'd
+              # catch, no scoring slot) is not the draw's doing.
+              @ticket_withheld = placed[:withheld].any?
             end
           end
           # present -> present (a typo fix) changes no placement: the ticket a
@@ -142,7 +142,7 @@ module Catches
             entry.lock!
             entry.catch_placements
               .where(species: @catch.species, slot_index: @slot_index, active: true)
-              .update_all(active: false)
+              .deactivate_all
             CatchPlacement.create!(
               catch: @catch, tournament: @tournament, tournament_entry: entry,
               species: @catch.species, slot_index: @slot_index, active: true
@@ -171,8 +171,8 @@ module Catches
             # or whose window no longer covers captured_at_device. A stale placement
             # can still live in one of those, so union in every tournament where the
             # catch currently holds an active placement this edit may rebuild
-            # (rebuildable_placements: every one for a judge, the editing club's
-            # for a per-club edit — the same set lock_touched_entries! locks).
+            # (rebuildable_placements: the editing club's when one is given, every
+            # one otherwise — the same set lock_touched_entries! locks).
             # Keyed by entry id, so a tournament in both sets is reconciled once.
             placed = rebuildable_placements.map { |p| { tournament: p.tournament, entry: p.tournament_entry } }
 
@@ -258,8 +258,9 @@ module Catches
         )
       end
 
-      # ticket_withheld: a manual_override tag add reached a tagged tournament
-      # whose draw had already run, so the tag saved but no ticket was issued.
+      # ticket_withheld: a re-placement reached a tagged tournament whose draw
+      # had already run, so the catch's tag saved but no ticket was issued (a
+      # tag added to a stranded Tagged Walleye, or a species change to one).
       { ticket_withheld: @ticket_withheld }
     end
 
@@ -325,15 +326,19 @@ module Catches
       end
     end
 
-    # The catch's active placements this edit may rebuild: every one for a judge
-    # action (no @club), only the editing club's for a per-club editor edit.
-    # Loaded once, with the entry and tournament each caller reads: it feeds
-    # the entry locks, the freed-slot reconcile and the length reconcile, all
-    # under the @catch row lock, and the set can't change between them (the
-    # catch lock serializes every writer of its placements). A tag edit that
-    # mints a ticket in between adds only tagged rows, which the length
-    # reconcile treats as a no-op anyway.
-    def rebuildable_placements
+    # The catch's active placements this edit may rebuild: only the editing
+    # club's when one is given (the organizer editor and the judge flows both
+    # pass one), every one otherwise. Loaded with the entry and tournament
+    # each caller reads. Memoized, but NOT stable across the entry locks: the
+    # @catch row lock only serializes writers that create rows for this catch
+    # (PlaceInSlots), while another catch's placement run bumps one of these
+    # rows under its ENTRY lock alone. The set can only shrink that way, so a
+    # pre-lock read is a safe superset for deciding what to lock and which
+    # entries the length reconcile re-derives (an entry the catch no longer
+    # occupies re-derives to the same basket). A caller that frees these
+    # rows must pass reload: true once it holds the locks.
+    def rebuildable_placements(reload: false)
+      @rebuildable_placements = nil if reload
       @rebuildable_placements ||= begin
         active = @catch.catch_placements.active
         active = active.joins(:tournament).where(tournaments: { club_id: @club.id }) if @club
@@ -345,6 +350,10 @@ module Catches
     # ones the catch currently occupies plus the ones PlaceInSlots will iterate.
     # Taking them all up front keeps later per-entry locks (ReconcileBasket,
     # PlaceInSlots) re-locks of rows already held, so the order can't invert.
+    # The occupied set is read before the locks (it decides what to lock) and
+    # can shrink while we wait for them: a concurrent run on another catch
+    # may bump one of these rows. It can't grow — a new row for this catch
+    # needs the @catch lock we hold — so the lock set stays complete.
     def lock_touched_entries!
       lock_entries!(rebuildable_placements.map(&:tournament_entry_id) + reachable_entry_ids)
     end
@@ -356,13 +365,19 @@ module Catches
     # the species-change branch of manual_override.
     def deactivate_and_replace!
       lock_touched_entries!
-      freed = rebuildable_placements
+      # Re-read under the locks: a row bumped by a concurrent run while we
+      # waited is already retired, and freeing it again would promote a
+      # backup into a slot that run now holds.
+      freed = rebuildable_placements(reload: true)
       CatchPlacement.where(id: freed.map(&:id)).deactivate_all
       freed.each { |p| ::Catches::ReconcileFreedSlot.call(placement: p) }
       # lock_touched_entries! already resolved reachable_rows; hand them over
       # rather than have PlaceInSlots look them up again under the locks.
       placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
       repoint_drawn_winners!(placed[:created])
+      # A species change to Tagged Walleye after the draw: the tag saves, the
+      # ticket does not. Same signal the tag-add branch reports.
+      @ticket_withheld = placed[:withheld].any?
     end
 
     # A ticket re-issued by the flows above may be the drawn winner's (the

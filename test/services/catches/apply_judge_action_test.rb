@@ -1478,5 +1478,77 @@ module Catches
       assert_equal 21.0, fish.length_inches.to_f
       assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
     end
+
+    test "deactivate_and_replace! re-reads the catch's placements under the entry locks" do
+      # A teammate's bigger fish syncs into @entry between this edit's snapshot
+      # of @catch's placements and its entry locks: it bumps @catch's slot-0
+      # row and takes the slot. A stale snapshot would then "free" the row a
+      # second time and promote the backup into a slot the 25 now holds.
+      backup = create(:catch, user: @user, species: @walleye, length_inches: 15, status: :synced)
+      Catches::PlaceInSlots.call(catch: backup)
+      bigger = create(:catch, user: @user, species: @walleye, length_inches: 25, status: :synced)
+
+      svc = ApplyJudgeAction.new(tournament: nil, catch: @catch, judge: @judge, action: :correct_location,
+                                 note: "gps fix", length_inches: nil, length_unit: nil, species_id: nil,
+                                 slot_index: nil, entry_id: nil, photo: nil, override_in_lake: nil,
+                                 override_in_sask: nil, latitude: @catch.latitude, longitude: @catch.longitude,
+                                 club: @club)
+      original = svc.method(:lock_entries!)
+      svc.define_singleton_method(:lock_entries!) do |ids|
+        original.call(ids)
+        Catches::PlaceInSlots.call(catch: bigger, broadcast: false)
+      end
+
+      assert_nothing_raised { svc.call }
+
+      active = @entry.catch_placements.active.to_a
+      assert_equal [bigger.id], active.map(&:catch_id), "the 25 keeps the only slot"
+      assert_equal 0, active.first.slot_index
+    end
+
+    test "manual_override species change to Tagged Walleye after the draw reports the withheld ticket" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @judge)
+
+      plain = create(:catch, user: @user, species: @walleye, length_inches: 18.0, captured_at_device: 90.minutes.ago)
+      result = ApplyJudgeAction.call(tournament: nil, catch: plain, judge: @judge, action: :manual_override,
+                                     species_id: tagged.id, tag_number: "A0042", note: "mis-ID", club: @club)
+
+      assert_equal tagged, plain.reload.species
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: plain).count
+      assert result[:ticket_withheld], "the species path withholds a ticket the same way the tag path does"
+    end
+
+    test "manual_override tag add on a disqualified catch is not reported as withheld by the draw" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @judge)
+
+      dq = create(:catch, user: @user, species: tagged, length_inches: 18.0, tag_number: "TMP",
+                  captured_at_device: 90.minutes.ago, status: :disqualified)
+      dq.update_column(:tag_number, nil)
+      result = ApplyJudgeAction.call(tournament: nil, catch: dq, judge: @judge, action: :manual_override,
+                                     tag_number: "A0042", note: "tag from photo", club: @club)
+
+      assert_equal "A0042", dq.reload.tag_number
+      assert_not result[:ticket_withheld], "a DQ'd catch earns no ticket regardless of the draw"
+    end
   end
 end

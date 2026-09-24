@@ -846,4 +846,30 @@ class TournamentsControllerTest < ActionDispatch::IntegrationTest
     assert_select "#leaderboard", text: /An organizer needs to re-draw/, count: 0
     assert_select "form[action=?]", draw_organizers_tournament_path(t, force: 1), count: 0
   end
+
+  test "tagged leaderboard renders when a winner is recorded without a draw time" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    organizer = create(:user, club: @club, role: :organizer)
+    angler = create(:user, club: @club, name: "Tagged Angler")
+    t = build(:tournament, club: @club, name: "Test Tagged", format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    enroll_user_in(t, user: angler)
+    fish = create(:catch, user: angler, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    Catches::PlaceInSlots.call(catch: fish)
+    Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: organizer)
+
+    walleye = create(:species, club: @club, name: "Walleye")
+    Catches::ApplyJudgeAction.call(tournament: nil, catch: fish, judge: organizer, action: :manual_override,
+                                   species_id: walleye.id, tag_number: "", note: "mis-ID", club: @club)
+    # The FK outlives a cleared draw time (a console reset): no winner, no void panel.
+    t.update_columns(drawn_at: nil)
+
+    get tournament_path(t)
+    assert_response :success
+    assert_select "#leaderboard", text: /no longer holds a ticket/, count: 0
+    assert_select "#leaderboard", text: /Winner/, count: 0
+  end
 end

@@ -39,7 +39,8 @@ class Club < ApplicationRecord
 
   # The bands as THIS club can actually pay them. The bands count anglers and
   # the minimum counts entries, but every entry has at least one angler
-  # aboard, so a night below the entry minimum is below it in anglers too:
+  # aboard, so a night never has fewer anglers than entries: a night below
+  # the minimum in anglers is below it in entries too and can't place. So
   # the first band starts at season_points_min_entries (a minimum of 5 pays
   # the 1–9 ladder to 5–9-angler nights at the earliest) and any band wholly
   # below the minimum is dropped. The admin preview and the member-facing
