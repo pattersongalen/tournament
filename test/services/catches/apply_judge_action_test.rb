@@ -1187,6 +1187,34 @@ module Catches
       assert t.drawn_winning_placement.active?
     end
 
+    test "reinstate after a forced re-draw re-issues a ticket the first draw drew from" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                    tag_number: "A0001", captured_at_device: 2.hours.ago)
+      other = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                     tag_number: "A0002", captured_at_device: 100.minutes.ago)
+      Catches::PlaceInSlots.call(catch: fish)
+      Catches::PlaceInSlots.call(catch: other)
+      Tournaments::DrawTaggedWinner.call(tournament: t, drawn_by: @judge)
+
+      # A wrong DQ after the draw, a re-draw over what is left, then the DQ undone.
+      ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :disqualify, note: "wrong call", club: @club)
+      Tournaments::DrawTaggedWinner.call(tournament: t, drawn_by: @judge, force: true)
+      result = ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :reinstate, club: @club)
+
+      reissued = CatchPlacement.find_by(tournament: t, catch: fish, active: true)
+      assert reissued, "a fish the first draw drew from is back in the pool once its DQ is undone"
+      assert reissued.in_draw_pool
+      assert_not result[:ticket_withheld]
+      assert_equal 2, t.reload.draw_pool.count, "the organizer can re-draw over both fish"
+    end
+
     test "reinstate hands PlaceInSlots the rows it already resolved to lock" do
       ApplyJudgeAction.call(tournament: @t, catch: @catch, judge: @judge, action: :disqualify, note: "oops")
 

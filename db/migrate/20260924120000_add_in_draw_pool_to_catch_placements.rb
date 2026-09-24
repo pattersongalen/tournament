@@ -47,7 +47,8 @@ class AddInDrawPoolToCatchPlacements < ActiveRecord::Migration[8.0]
   # late-entrant backfill re-places a re-added member's fish and would mint a
   # live ticket for one the draw never saw. Left unstamped, a fish that WAS
   # in the draw and is re-placed later earns no ticket and says so (the
-  # withheld-ticket notice), which is the recoverable error.
+  # withheld-ticket notice): an error the organizer is told about, rather
+  # than a silent ticket for a fish the draw never saw.
   def backfill_draw_pool
     execute <<~SQL
       UPDATE catch_placements cp

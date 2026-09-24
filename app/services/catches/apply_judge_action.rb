@@ -169,7 +169,9 @@ module Catches
             # (rebuildable_placements: the editing club's when one is given, every
             # one otherwise — the same set lock_touched_entries! locks).
             # Keyed by entry id, so a tournament in both sets is reconciled once.
-            placed = rebuildable_placements.map { |p| { tournament: p.tournament, entry: p.tournament_entry } }
+            # Through the entry: rebuildable_placements preloads the entry and
+            # ITS tournament, so this costs no query per row.
+            placed = rebuildable_placements.map { |p| { tournament: p.tournament_entry.tournament, entry: p.tournament_entry } }
 
             rows = (eligible + placed).uniq { |r| r[:entry].id }
             rows.sort_by { |r| r[:entry].id }  # stable lock order
@@ -283,10 +285,15 @@ module Catches
     end
 
     # Voided only for a tournament whose recorded winner is one of THIS
-    # catch's rows: retiring any other ticket voids nothing.
+    # catch's rows: retiring any other ticket voids nothing. The rule is
+    # Tournament#drawn_winner_voided? (the winner's fish holds no live row
+    # there), folded into one query: it runs twice per retiring action under
+    # the @catch row lock, and loading each winner and probing its rows in
+    # Ruby was 1 + 2N round trips each time.
     def draw_voided_by_this_catch?
       ::Tournament.where(drawn_winning_placement_id: @catch.catch_placements.select(:id))
-                  .any?(&:drawn_winner_voided?)
+                  .where.not(id: ::CatchPlacement.active.where(catch_id: @catch.id).select(:tournament_id))
+                  .exists?
     end
 
     # For a bingo tournament, the only card this edit changes is the one the catch's

@@ -50,12 +50,17 @@ module Tournaments
         # Record the pool as a fact on the rows drawn from. PlaceInSlots reads
         # it to decide whether a post-draw re-placement re-issues a ticket
         # (the fish was in the draw) or earns none (it was not). A forced
-        # re-draw runs over the tickets active NOW, so the flag means "in the
-        # most recent draw": rows stamped by an earlier draw and since
-        # retired lose it. Under the locks above the active set IS
-        # `eligible`, so one statement over the rows whose stamp is wrong
-        # does both, keeping the lock-held write short.
-        @tournament.catch_placements.where("in_draw_pool <> active").update_all("in_draw_pool = active")
+        # re-draw runs over the tickets active NOW and stamps them too, but a
+        # row an earlier draw stamped keeps its stamp when retired: the stamp
+        # means "a draw drew from this fish", not "the latest draw did". A
+        # fish DQ'd after the first draw and reinstated after the re-draw
+        # would otherwise hold no stamped row, and no re-draw, reinstate or
+        # backfill could ever mint it a ticket again (the pool only re-draws
+        # over live rows). Re-issued instead, it lands back on the
+        # leaderboard for the organizer to re-draw over. Under the locks
+        # above the active set IS `eligible`, so one statement over the
+        # unstamped live rows keeps the lock-held write short.
+        @tournament.catch_placements.active.where(in_draw_pool: false).update_all(in_draw_pool: true)
         @tournament.update!(
           drawn_winning_placement_id: winner.id,
           drawn_at: Time.current,

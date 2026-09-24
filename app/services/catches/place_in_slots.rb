@@ -146,10 +146,12 @@ module Catches
           elsif tournament.format_tagged?
             # Tagged: every catch with a tag earns a fresh placement (= one ticket in
             # the draw). Mirrors Hidden Length — no bumping, slot_count irrelevant.
-            # Belt-and-suspenders skip if tag_number is blank; the Catch model
-            # validates presence for Tagged Walleye, so this only fires if a non-
-            # Tagged-Walleye species somehow slots into a tagged tournament.
-            next if @catch.tag_number.blank?
+            # Belt-and-suspenders: the tournament admits only a Tagged Walleye
+            # slot and the Catch model requires a tag on one, so this only
+            # fires if either is bypassed. Guarded on the species, not just
+            # the tag: a stray tag left on a plain walleye must never earn a
+            # ticket, or re-issue (and repoint the winner to) one below.
+            next unless @catch.species&.tagged_walleye? && @catch.tag_number.present?
             # The draw pool closes when the winner is drawn. A catch arriving
             # after that (a late offline sync, a science tag filled in from the
             # photo the next day) keeps its tag but earns no ticket: it was

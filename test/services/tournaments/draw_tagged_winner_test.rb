@@ -142,7 +142,7 @@ module Tournaments
              "entries first, then the tournament row: the order every writer uses, so nothing inverts"
     end
 
-    test "a forced re-draw re-stamps the pool from the tickets active now" do
+    test "a forced re-draw stamps the tickets active now and keeps an earlier draw's stamp on a retired row" do
       first = Catches::PlaceInSlots.call(
         catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
                       tag_number: "A001", captured_at_device: 90.minutes.ago)
@@ -158,7 +158,9 @@ module Tournaments
       CatchPlacement.where(id: first.id).deactivate_all
       Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer, force: true)
 
-      assert_not first.reload.in_draw_pool, "a ticket pulled before the re-draw is out of the new pool"
+      assert first.reload.in_draw_pool,
+             "the first draw drew from this row: a reinstate after the re-draw must still find a stamped row, " \
+             "or the fish is gone with no organizer or judge action able to bring it back"
       assert second.reload.in_draw_pool
       assert_equal second.id, @t.reload.drawn_winning_placement_id
     end

@@ -39,39 +39,47 @@ class Catch < ApplicationRecord
     in_geofence?(:lake)
   end
 
-  # Atomically add `flag` to the flags array in a single UPDATE (no-op if it's
-  # already present). The previous `flags + [...]` then `update_columns` pattern
-  # was a read-modify-write from an in-memory snapshot: two concurrent flag
-  # writers (e.g. FlagImportedPhotoJob and a teammate's FlagDuplicates touching
-  # the same row) could each read the old array and clobber the other's flag.
-  # `array_append` in one statement closes that window. When `bump_to_review` is
-  # set, a still-synced catch is moved to needs_review in the same statement —
-  # guarded on the *current* status so a concurrent judge decision is never
-  # overwritten. Does not refresh this in-memory instance.
-  # One guarded UPDATE against the row's current flags, so two writers
-  # appending different flags never clobber each other and a repeat add is a
-  # no-op. The loaded instance is then brought in line with what the row now
-  # holds (the flag, and the status bump when the row took it), as a mirror
-  # of the write rather than a pending change: the API create response and
-  # the catch views read flags/status off this instance after placement, and
-  # a later save must not re-send them. Any flag the row already carried
-  # that this instance never loaded is deliberately left alone — the
-  # concurrent-writer guarantee is about the row, not the snapshot.
+  # Add `flag` to the flags array in one guarded UPDATE against the row's
+  # current flags: two writers appending different flags (FlagImportedPhotoJob
+  # and a teammate's FlagDuplicates on the same row) never clobber each other
+  # the way a read-modify-write from an in-memory snapshot would, and a
+  # repeat add is a no-op. With `bump_to_review`, a still-synced catch moves
+  # to needs_review in the same statement, guarded on the row's *current*
+  # status so a concurrent judge decision is never overwritten.
+  #
+  # The loaded instance is then brought in line with what the row now holds,
+  # read back from the statement itself (RETURNING) rather than inferred from
+  # this instance's stale snapshot: a row a judge disqualified after this
+  # instance loaded it keeps its status, and the mirror says so. Mirrored as
+  # a fact, not a pending change: the API create response and the catch
+  # views read flags/status off this instance after placement, and a later
+  # save must not re-send them. When the row already carried the flag the
+  # statement touches nothing and only the flag is mirrored; any other flag
+  # the row holds that this instance never loaded is deliberately left alone
+  # (the concurrent-writer guarantee is about the row, not the snapshot).
+  # Returns the number of rows changed (0 or 1).
   def add_flag!(flag, bump_to_review: false)
-    quoted = self.class.connection.quote(flag)
-    set_sql = "flags = array_append(flags, #{quoted}::text)"
+    set_sql = "flags = array_append(flags, ?::text)"
     if bump_to_review
       synced = self.class.statuses["synced"]
       review = self.class.statuses["needs_review"]
       set_sql += ", status = CASE WHEN status = #{synced} THEN #{review} ELSE status END"
     end
-    changed = self.class.where(id: id)
-                        .where.not("flags @> ARRAY[?]::text[]", flag)
-                        .update_all(set_sql)
-    write_attribute(:flags, Array(flags) | [flag])
-    write_attribute(:status, "needs_review") if changed == 1 && bump_to_review && synced?
+    sql = self.class.sanitize_sql_array([
+      "UPDATE #{self.class.quoted_table_name} SET #{set_sql} " \
+      "WHERE id = ? AND NOT (flags @> ARRAY[?]::text[]) RETURNING flags, status",
+      flag, id, flag
+    ])
+    row = self.class.connection.exec_query(sql, "#{self.class.name} add_flag!").cast_values.first
+    if row
+      new_flags, new_status = row
+      write_attribute(:flags, new_flags)
+      write_attribute(:status, new_status)
+    else
+      write_attribute(:flags, Array(flags) | [flag])
+    end
     clear_attribute_changes(%i[flags status])
-    changed
+    row ? 1 : 0
   end
 
   enum :status, {

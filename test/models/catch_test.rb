@@ -48,6 +48,16 @@ class CatchTest < ActiveSupport::TestCase
     assert_not catch_record.changed?, "mirroring the row is not a pending change"
   end
 
+  test "add_flag! mirrors the status the row holds, not the loaded snapshot" do
+    catch_record = create(:catch, user: @user, species: @walleye, status: :synced)
+    # A judge disqualified the row after this instance loaded it as synced.
+    Catch.where(id: catch_record.id).update_all(status: Catch.statuses["disqualified"])
+    catch_record.add_flag!("imported_photo", bump_to_review: true)
+    assert catch_record.disqualified?, "the row kept its DQ, so the instance must not claim needs_review"
+    assert_includes catch_record.flags, "imported_photo"
+    assert_not catch_record.changed?
+  end
+
   test "add_flag! with bump_to_review only moves a synced catch to needs_review" do
     { "synced" => "needs_review", "disqualified" => "disqualified" }.each do |start_status, expected|
       catch_record = create(:catch, user: @user, species: @walleye, status: start_status)
