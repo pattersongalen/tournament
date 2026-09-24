@@ -1126,9 +1126,10 @@ module Catches
       Catches::PlaceInSlots.call(catch: fish)
       assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count
 
-      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
-                            tag_number: "A0042", note: "tag added", club: @club)
+      result = ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                                     tag_number: "A0042", note: "tag added", club: @club)
       assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+      assert_not result[:ticket_withheld]
     end
 
     test "manual_override tag_number does not mint a ticket into a tagged tournament already drawn" do
@@ -1150,13 +1151,14 @@ module Catches
                         tag_number: "TMP", captured_at_device: 90.minutes.ago)
       stranded.update_column(:tag_number, nil)
 
-      ApplyJudgeAction.call(tournament: nil, catch: stranded, judge: @judge, action: :manual_override,
-                            tag_number: "A0042", note: "tag from photo", club: @club)
+      result = ApplyJudgeAction.call(tournament: nil, catch: stranded, judge: @judge, action: :manual_override,
+                                     tag_number: "A0042", note: "tag from photo", club: @club)
 
       assert_equal "A0042", stranded.reload.tag_number, "the tag itself is still recorded"
       assert_equal 0, CatchPlacement.where(tournament: t, catch: stranded).count,
                    "the draw pool is closed once the winner is drawn"
       assert ticket.reload.active
+      assert result[:ticket_withheld], "the caller is told the tag saved without a ticket"
     end
 
     test "correct_location after the draw re-issues the winner's ticket instead of dropping it" do
@@ -1254,6 +1256,9 @@ module Catches
       ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :reinstate, note: "my mistake")
 
       assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+      assert_equal CatchPlacement.find_by!(tournament: t, catch: fish, active: true).id,
+                   t.reload.drawn_winning_placement_id,
+                   "the recorded winner follows the reinstated fish onto its re-issued ticket"
     end
 
     test "reinstate after the draw does not mint a ticket for a fish DQ'd before it" do

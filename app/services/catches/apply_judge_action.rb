@@ -32,6 +32,7 @@ module Catches
       @club = club
       @snapshot_old_attachment_id = nil
       @notify_owner = false
+      @ticket_withheld = false
     end
 
     def call
@@ -117,8 +118,14 @@ module Catches
               lock_touched_entries!
               # One run scoped to the list, handed the rows already resolved
               # above so nothing is looked up again under the row locks.
-              ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows,
-                                           tournaments: tagged_rows.map { |r| r[:tournament] })
+              placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows,
+                                                    tournaments: tagged_rows.map { |r| r[:tournament] })
+              # PlaceInSlots deliberately mints nothing into a tournament whose
+              # draw already ran. The tag still saves, so tell the caller: the
+              # organizer otherwise sees "Catch updated." and assumes a ticket.
+              ticketed = placed[:created].map(&:tournament_id)
+              @ticket_withheld = ::Tournament.where(id: tagged_rows.map { |r| r[:tournament].id })
+                                             .where.not(drawn_at: nil).where.not(id: ticketed).exists?
             end
           end
           # present -> present (a typo fix) changes no placement: the ticket a
@@ -208,7 +215,8 @@ module Catches
           @notify_owner = true
           # Hand over the rows resolved for the locks above rather than have
           # PlaceInSlots run ActiveForUser again while holding them.
-          ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
+          placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
+          repoint_drawn_winners!(placed[:created])
         end
         after = snapshot
 
@@ -249,6 +257,10 @@ module Catches
           tournament_id: @tournament.id
         )
       end
+
+      # ticket_withheld: a manual_override tag add reached a tagged tournament
+      # whose draw had already run, so the tag saved but no ticket was issued.
+      { ticket_withheld: @ticket_withheld }
     end
 
     private
@@ -349,7 +361,19 @@ module Catches
       freed.each { |p| ::Catches::ReconcileFreedSlot.call(placement: p) }
       # lock_touched_entries! already resolved reachable_rows; hand them over
       # rather than have PlaceInSlots look them up again under the locks.
-      ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
+      placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
+      repoint_drawn_winners!(placed[:created])
+    end
+
+    # A ticket re-issued by the flows above may be the drawn winner's (the
+    # retired row was in the draw, so PlaceInSlots minted a replacement). Keep
+    # the tournament's recorded winner on the live row. The write belongs to
+    # the judge flows, the only callers that retire and replace a ticket, not
+    # to PlaceInSlots, which the API sync and the backfill also run.
+    def repoint_drawn_winners!(created)
+      created.each do |ticket|
+        ticket.tournament.repoint_drawn_winner!(ticket) if ticket.in_draw_pool?
+      end
     end
 
     def snapshot

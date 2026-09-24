@@ -26,7 +26,7 @@ module CatchDetailEditing
   end
 
   def update
-    Catches::ApplyJudgeAction.call(
+    result = Catches::ApplyJudgeAction.call(
       tournament: nil, catch: @catch, judge: current_user, action: :manual_override,
       note: params[:note],
       length_inches: resolved_length_inches(@catch),
@@ -35,10 +35,17 @@ module CatchDetailEditing
       tag_number: params[:tag_number],
       club: current_club
     )
-    redirect_to url_for(action: :show, id: @catch.id), notice: "Catch updated."
+    redirect_to url_for(action: :show, id: @catch.id), notice: catch_updated_notice(result)
   end
 
   private
+
+  # A tag added after the draw saves but earns no ticket (the pool closed at
+  # the draw); say so rather than let "Catch updated." imply one was issued.
+  def catch_updated_notice(result)
+    return "Catch updated." unless result[:ticket_withheld]
+    "Tag saved. The draw already ran, so no ticket was issued for this catch."
+  end
 
   # Only catches owned by a member of the current club are editable; anything
   # else raises RecordNotFound (→ 404).

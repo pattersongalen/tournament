@@ -155,6 +155,33 @@ class Organizers::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "X1795", fish.reload.tag_number
   end
 
+  test "adding a tag after the draw says no ticket was issued" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: @member)
+    drawn = create(:catch, user: @member, species: tagged, length_inches: 19.0,
+                   tag_number: "A0001", captured_at_device: 2.hours.ago)
+    Catches::PlaceInSlots.call(catch: drawn)
+    Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @organizer)
+    stranded = create(:catch, user: @member, species: tagged, length_inches: 18.0,
+                      tag_number: "TMP", captured_at_device: 90.minutes.ago)
+    stranded.update_column(:tag_number, nil)
+
+    sign_in_as(@organizer)
+    patch organizers_catch_path(stranded.id), params: {
+      species_id: tagged.id, length: "18", length_unit: "inches", tag_number: "A0042", note: "from photo"
+    }
+
+    assert_redirected_to organizers_catch_path(stranded.id)
+    assert_match(/no ticket was issued/, flash[:notice])
+    assert_equal "A0042", stranded.reload.tag_number
+    assert_equal 0, CatchPlacement.where(tournament: t, catch: stranded).count
+  end
+
   test "edit form shows the current science tag" do
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")
     fish = create(:catch, user: @member, species: tagged, length_inches: 18.0, tag_number: "A0042")

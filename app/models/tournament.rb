@@ -82,6 +82,34 @@ class Tournament < ApplicationRecord
     format_standard? || format_big_fish_season? || format_fish_train?
   end
 
+  # The drawn fish's ticket can be retired after the draw (a DQ, a species
+  # correction to plain walleye). Resolved by catch, not by row: a GPS fix
+  # re-issues the ticket as a new row and the fish is still the winner, and
+  # a winner recorded before the FK followed re-issued rows still resolves.
+  def drawn_winner_voided?
+    winner = drawn_winning_placement
+    winner.present? && !catch_placements.active.exists?(catch_id: winner.catch_id)
+  end
+
+  # Whether a re-draw has anything to run over. With no active ticket the
+  # draw service refuses, so the views offer nothing rather than a button
+  # that fails.
+  def tickets_remain?
+    catch_placements.active.exists?
+  end
+
+  # After a judge flow retires the drawn winner's ticket and re-issues it as
+  # a new row, keep the recorded winner on the live row so anything trusting
+  # the FK sees an active ticket. One guarded UPDATE against the current DB
+  # value, so a stale in-memory winner is never written back and a ticket
+  # for any other fish is a no-op. Runs under the entry locks the judge flow
+  # already holds, which DrawTaggedWinner also takes, so it can't race a draw.
+  def repoint_drawn_winner!(ticket)
+    Tournament.where(id: id)
+              .where(drawn_winning_placement_id: CatchPlacement.where(catch_id: ticket.catch_id).select(:id))
+              .update_all(drawn_winning_placement_id: ticket.id)
+  end
+
   # Other tournaments sharing this one's link group. Club-scoped as well as
   # group-scoped: a group id is generated per link, but scoping to the club
   # means a stray duplicate can never reach across clubs.

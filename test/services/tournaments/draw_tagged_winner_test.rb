@@ -101,6 +101,26 @@ module Tournaments
       assert_not retired.reload.in_draw_pool, "a ticket pulled before the draw was never in the pool"
     end
 
+    test "serializes on the tournament's entries, the lock every ticket writer holds" do
+      Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
+                      tag_number: "A001", captured_at_device: 90.minutes.ago)
+      )
+      locks = []
+      probe = ->(_name, _start, _finish, _id, payload) do
+        sql = payload[:sql].to_s
+        locks << sql if sql.include?("FOR UPDATE")
+      end
+      ActiveSupport::Notifications.subscribed(probe, "sql.active_record") do
+        Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+      end
+
+      assert locks.any? { |sql| sql.include?('"tournament_entries"') },
+             "the draw must take the entry locks PlaceInSlots and the judge flows take before writing a ticket"
+      assert_not locks.any? { |sql| sql.include?('FROM "tournaments"') },
+                 "a tournament row lock inverts against writers that lock entries first (deadlock)"
+    end
+
     test "a forced re-draw re-stamps the pool from the tickets active now" do
       first = Catches::PlaceInSlots.call(
         catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,

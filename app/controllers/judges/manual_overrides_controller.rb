@@ -7,7 +7,7 @@ class Judges::ManualOverridesController < Judges::BaseController
   end
 
   def create
-    Catches::ApplyJudgeAction.call(
+    result = Catches::ApplyJudgeAction.call(
       tournament: @tournament, catch: @catch, judge: current_user, action: :manual_override,
       note: params[:note],
       length_inches: resolved_length_inches(@catch),
@@ -21,7 +21,9 @@ class Judges::ManualOverridesController < Judges::BaseController
       # re-broadcasts another club's leaderboards (matches the organizer editor).
       club: @tournament.club
     )
-    redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id)
+    # A tag added after the draw saves but earns no ticket; say so.
+    notice = "Tag saved. The draw already ran, so no ticket was issued for this catch." if result[:ticket_withheld]
+    redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id), notice: notice
   rescue Catches::ApplyJudgeAction::ForceSlotUnsupported
     redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id),
                 alert: "Forcing a catch into a slot isn't supported for this tournament format."

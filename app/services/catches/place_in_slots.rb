@@ -159,26 +159,23 @@ module Catches
             # stamps in_draw_pool on the rows it drew from; a fish with no
             # stamped row (a pre-draw DQ reinstated the next day) was not in
             # the draw, and a fresh row would list a fish the draw never saw.
-            in_pool = tournament.drawn_at.present? &&
+            #
+            # drawn_at is read from the DB here, under the entry lock, not
+            # from the `tournament` loaded before it: DrawTaggedWinner locks
+            # the tournament's entries before it snapshots and stamps the
+            # pool, so a draw that committed while we waited for this entry
+            # is visible now, and a ticket minted here can't slip between its
+            # snapshot and its stamp.
+            drawn   = ::Tournament.where(id: tournament.id).pick(:drawn_at).present?
+            in_pool = drawn &&
               CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id, in_draw_pool: true).exists?
-            next if tournament.drawn_at.present? && !in_pool
+            next if drawn && !in_pool
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1
-            ticket = CatchPlacement.create!(
+            created << CatchPlacement.create!(
               catch: @catch, tournament: tournament, tournament_entry: entry,
               species: @catch.species, slot_index: next_index, active: true,
               in_draw_pool: in_pool
             )
-            created << ticket
-            # The re-issued ticket may be the drawn winner's: point the
-            # tournament's recorded winner at the live row, not the retired
-            # one, so anything trusting the FK sees an active ticket. One
-            # guarded UPDATE against the current DB value rather than the
-            # possibly stale `tournament` loaded before the locks.
-            if in_pool
-              ::Tournament.where(id: tournament.id)
-                          .where(drawn_winning_placement_id: CatchPlacement.where(catch_id: @catch.id).select(:id))
-                          .update_all(drawn_winning_placement_id: ticket.id)
-            end
             affected_tournaments << tournament
           elsif tournament.format_biggest_vs_smallest?
             # Biggest vs Smallest: keep at most 2 placements per (entry, species) — the

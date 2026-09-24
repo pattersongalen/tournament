@@ -959,9 +959,33 @@ module Catches
     assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
                  "a fish that was in the draw keeps a ticket after a post-draw re-placement"
     assert reissued.in_draw_pool, "the re-issued ticket inherits the fish's place in the pool"
-    assert_equal reissued.id, t.reload.drawn_winning_placement_id,
-                 "the recorded winner follows the winning fish onto its re-issued ticket"
+    assert_equal ticket.id, t.reload.drawn_winning_placement_id,
+                 "the draw record is the judge flow's to repoint (ApplyJudgeAction), not PlaceInSlots'"
     assert_equal [t], result[:affected_tournaments]
+  end
+
+  test "tagged: the draw state is read from the DB under the lock, not from the handed-in row" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    late = create(:catch, user: user, species: tagged, length_inches: 17.0,
+                  tag_number: "A0002", captured_at_device: 90.minutes.ago)
+    # The caller resolved its rows before a draw committed elsewhere: the
+    # in-memory tournament still says undrawn while the DB says drawn.
+    stale_rows = Tournaments::ActiveForUser.with_entries(user: user, at: late.captured_at_device)
+    assert_nil stale_rows.first[:tournament].drawn_at
+    t.update_columns(drawn_at: Time.current)
+
+    result = PlaceInSlots.call(catch: late, rows: stale_rows)
+
+    assert_empty result[:created], "a stale undrawn row must not mint a ticket into a drawn pool"
+    assert_equal 0, CatchPlacement.where(tournament: t, catch: late).count
   end
 
   test "tagged: re-placing a non-winning fish after the draw leaves the recorded winner alone" do
