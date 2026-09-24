@@ -147,7 +147,7 @@ module Catches
               catch: @catch, tournament: @tournament, tournament_entry: entry,
               species: @catch.species, slot_index: @slot_index, active: true
             )
-          elsif !species_changed && @length_inches && prior_length && @length_inches.to_f != prior_length.to_f
+          elsif !species_changed && length_changed && prior_length
             # A length edit can change which catches make each basket — it can pull
             # in a previously-unplaced backup (e.g. one grown past a slot threshold)
             # or drop a now-smaller fish. So re-derive every tournament the catch is
@@ -216,7 +216,9 @@ module Catches
           # Hand over the rows resolved for the locks above rather than have
           # PlaceInSlots run ActiveForUser again while holding them.
           placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
-          repoint_drawn_winners!(placed[:created])
+          # A fish DQ'd before the draw and reinstated after it was never in
+          # the pool: it comes back with no ticket, and the caller says so.
+          @ticket_withheld = placed[:withheld].any?
         end
         after = snapshot
 
@@ -374,21 +376,12 @@ module Catches
       # lock_touched_entries! already resolved reachable_rows; hand them over
       # rather than have PlaceInSlots look them up again under the locks.
       placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, club: @club, rows: reachable_rows)
-      repoint_drawn_winners!(placed[:created])
-      # A species change to Tagged Walleye after the draw: the tag saves, the
-      # ticket does not. Same signal the tag-add branch reports.
+      # A ticket the draw drew from is re-issued by PlaceInSlots, which also
+      # repoints the recorded winner at the new row. Only the "no ticket"
+      # signal comes back here: a species change to Tagged Walleye after the
+      # draw, or a fish the draw never saw (a DQ undone after it), saves but
+      # earns none. Same signal the tag-add branch reports.
       @ticket_withheld = placed[:withheld].any?
-    end
-
-    # A ticket re-issued by the flows above may be the drawn winner's (the
-    # retired row was in the draw, so PlaceInSlots minted a replacement). Keep
-    # the tournament's recorded winner on the live row. The write belongs to
-    # the judge flows, the only callers that retire and replace a ticket, not
-    # to PlaceInSlots, which the API sync and the backfill also run.
-    def repoint_drawn_winners!(created)
-      created.each do |ticket|
-        ticket.tournament.repoint_drawn_winner!(ticket) if ticket.in_draw_pool?
-      end
     end
 
     def snapshot

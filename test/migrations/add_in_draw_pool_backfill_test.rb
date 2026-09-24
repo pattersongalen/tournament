@@ -39,6 +39,9 @@ class AddInDrawPoolBackfillTest < ActiveSupport::TestCase
     retired_after_draw  = ticket("A2", created_at: @drawn_at - 2.hours, active: false)
     retired_before_draw = ticket("A3", created_at: @drawn_at - 2.hours, active: false)
     minted_after_draw   = ticket("A4", created_at: @drawn_at + 2.hours)
+    # Retired by a member drop (no audit row): nothing says which side of the
+    # draw it left on, so it must not be asserted into the pool.
+    retired_no_audit    = ticket("A5", created_at: @drawn_at - 2.hours, active: false)
     retirement_audit(retired_after_draw,  at: @drawn_at + 1.hour)
     retirement_audit(retired_before_draw, at: @drawn_at - 1.hour)
     @t.update_columns(drawn_at: @drawn_at, drawn_winning_placement_id: active_at_draw.id)
@@ -50,5 +53,7 @@ class AddInDrawPoolBackfillTest < ActiveSupport::TestCase
     assert retired_after_draw.reload.in_draw_pool, "retired after the draw: it was drawn from"
     assert_not retired_before_draw.reload.in_draw_pool, "the audit trail shows it left the pool first"
     assert_not minted_after_draw.reload.in_draw_pool
+    assert_not retired_no_audit.reload.in_draw_pool,
+               "a retired row with no evidence it was still in at the draw must not be stamped"
   end
 end

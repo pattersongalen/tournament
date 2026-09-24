@@ -959,8 +959,8 @@ module Catches
     assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
                  "a fish that was in the draw keeps a ticket after a post-draw re-placement"
     assert reissued.in_draw_pool, "the re-issued ticket inherits the fish's place in the pool"
-    assert_equal ticket.id, t.reload.drawn_winning_placement_id,
-                 "the draw record is the judge flow's to repoint (ApplyJudgeAction), not PlaceInSlots'"
+    assert_equal reissued.id, t.reload.drawn_winning_placement_id,
+                 "the recorded winner follows the re-issued row wherever the re-placement came from"
     assert_equal [t], result[:affected_tournaments]
   end
 
@@ -986,6 +986,35 @@ module Catches
 
     assert_empty result[:created], "a stale undrawn row must not mint a ticket into a drawn pool"
     assert_equal 0, CatchPlacement.where(tournament: t, catch: late).count
+  end
+
+  test "tagged: the draw state is read with a key-share lock on the tournament, after the entry lock, in one query" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+
+    sql_log = []
+    probe = ->(_name, _start, _finish, _id, payload) { sql_log << payload[:sql].to_s }
+    ActiveSupport::Notifications.subscribed(probe, "sql.active_record") do
+      PlaceInSlots.call(catch: fish, broadcast: false)
+    end
+
+    entry_lock = sql_log.index { |sql| sql.include?('"tournament_entries"') && sql.include?("FOR UPDATE") }
+    tournament_reads = sql_log.each_index.select { |i| sql_log[i].match?(/SELECT .*FROM "tournaments"/) && sql_log[i].include?("drawn_at") }
+    assert entry_lock, "the entry lock must be taken"
+    assert_equal 1, tournament_reads.size, "one query decides drawn + in-pool, not a pick and an exists"
+    assert tournament_reads.first > entry_lock, "the tournament row is locked after the entry, never before"
+    assert_includes sql_log[tournament_reads.first], "FOR KEY SHARE",
+                    "the read must conflict with the draw's FOR UPDATE so a ticket can't slip between its snapshot and stamp"
+    assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
   end
 
   test "tagged: re-placing a non-winning fish after the draw leaves the recorded winner alone" do

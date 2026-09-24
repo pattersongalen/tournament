@@ -98,12 +98,16 @@ class Tournament < ApplicationRecord
     catch_placements.active.exists?
   end
 
-  # After a judge flow retires the drawn winner's ticket and re-issues it as
-  # a new row, keep the recorded winner on the live row so anything trusting
-  # the FK sees an active ticket. One guarded UPDATE against the current DB
-  # value, so a stale in-memory winner is never written back and a ticket
-  # for any other fish is a no-op. Runs under the entry locks the judge flow
-  # already holds, which DrawTaggedWinner also takes, so it can't race a draw.
+  # After the drawn winner's ticket is retired and re-issued as a new row (a
+  # judge correction, or a member dropped from a boat and put on another with
+  # the backfill sweep), keep the recorded winner on the live row so anything
+  # trusting the FK sees an active ticket. Called by PlaceInSlots as it mints
+  # the row, the one place every re-issue passes through. One guarded UPDATE
+  # against the current DB value, so a stale in-memory winner is never
+  # written back and a ticket for any other fish touches no row (and takes no
+  # lock). Runs under the entry lock and the tournament key-share lock
+  # PlaceInSlots holds; DrawTaggedWinner takes both for update, so it can't
+  # race a draw.
   def repoint_drawn_winner!(ticket)
     Tournament.where(id: id)
               .where(drawn_winning_placement_id: CatchPlacement.where(catch_id: ticket.catch_id).select(:id))

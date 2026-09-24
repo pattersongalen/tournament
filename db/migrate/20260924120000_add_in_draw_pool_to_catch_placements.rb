@@ -24,11 +24,15 @@ class AddInDrawPoolToCatchPlacements < ActiveRecord::Migration[8.0]
   # updated_at: every retirement before this column was a bare update_all,
   # which leaves the stamp at creation time. The JudgeAction audit trail
   # can say it. Its before/after snapshots list the catch's active
-  # (entry, slot) pairs, so a judge action recorded before the draw whose
-  # snapshots show this row going active -> inactive retired it before the
-  # draw; a retired row with no such action was retired after it. (A member
-  # drop retires without an audit row, but a dropped member has no entry to
-  # be re-placed into, so a stamp on that row is never read.)
+  # (entry, slot) pairs, so a judge action recorded at or after the draw
+  # whose snapshots show this row going active -> inactive retired it after
+  # the draw: the row was in the pool. Only that positive evidence stamps a
+  # retired row. A retirement with no audit row (a member dropped from a
+  # boat) could have happened on either side of the draw, and a stamp is
+  # read: the late-entrant backfill re-places a re-added member's fish and
+  # would mint a live ticket for one the draw never saw. Left unstamped, a
+  # fish that WAS in the draw and is re-placed later earns no ticket and
+  # says so (the withheld-ticket notice), which is the recoverable error.
   def backfill_draw_pool
     execute <<~SQL
       UPDATE catch_placements cp
@@ -37,12 +41,12 @@ class AddInDrawPoolToCatchPlacements < ActiveRecord::Migration[8.0]
        WHERE t.id = cp.tournament_id
          AND t.drawn_at IS NOT NULL
          AND cp.created_at <= t.drawn_at
-         AND (cp.active OR NOT EXISTS (
+         AND (cp.active OR EXISTS (
                SELECT 1
                  FROM judge_actions ja
                 WHERE ja.catch_id = cp.catch_id
                   AND ja.created_at >= cp.created_at
-                  AND ja.created_at < t.drawn_at
+                  AND ja.created_at >= t.drawn_at
                   AND EXISTS (SELECT 1 FROM jsonb_array_elements(ja.before_state -> 'active_placements') b
                                WHERE b = jsonb_build_array(cp.tournament_entry_id, cp.slot_index))
                   AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(ja.after_state -> 'active_placements') a

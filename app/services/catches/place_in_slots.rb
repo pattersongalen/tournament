@@ -164,25 +164,42 @@ module Catches
             # stamped row (a pre-draw DQ reinstated the next day) was not in
             # the draw, and a fresh row would list a fish the draw never saw.
             #
-            # drawn_at is read from the DB here, under the entry lock, not
-            # from the `tournament` loaded before it: DrawTaggedWinner locks
-            # the tournament's entries before it snapshots and stamps the
-            # pool, so a draw that committed while we waited for this entry
-            # is visible now, and a ticket minted here can't slip between its
-            # snapshot and its stamp.
-            drawn   = ::Tournament.where(id: tournament.id).pick(:drawn_at).present?
-            in_pool = drawn &&
-              CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id, in_draw_pool: true).exists?
+            # drawn_at is read from the DB here, not from the `tournament`
+            # loaded before the entry lock, and the read locks the tournament
+            # row FOR KEY SHARE. DrawTaggedWinner locks every entry and then
+            # the tournament row FOR UPDATE before it snapshots and stamps the
+            # pool, so a draw that committed while we waited for this entry is
+            # visible now, and a ticket for an entry the draw's entry pass never
+            # saw (a late entrant added during the draw) still waits on the row
+            # and sees the draw. Key-share is the weakest lock that conflicts
+            # with FOR UPDATE: it does not conflict with itself, so two runs
+            # placing across the same pair of tagged tournaments in opposite
+            # entry order can't deadlock on the rows, and it does not conflict
+            # with the plain UPDATE repoint_drawn_winner! runs below.
+            # Locked after the entry, the order every writer uses.
+            #
+            # One query: whether the pool is closed, and whether this fish
+            # holds a stamped row in it (only meaningful once it is).
+            drawn, in_pool = ::Tournament.where(id: tournament.id).lock("FOR KEY SHARE")
+              .pick(Arel.sql("drawn_at IS NOT NULL"),
+                    CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id, in_draw_pool: true).arel.exists)
             if drawn && !in_pool
               withheld << tournament.id
               next
             end
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1
-            created << CatchPlacement.create!(
+            ticket = CatchPlacement.create!(
               catch: @catch, tournament: tournament, tournament_entry: entry,
               species: @catch.species, slot_index: next_index, active: true,
               in_draw_pool: in_pool
             )
+            created << ticket
+            # A re-issued pool ticket may be the drawn winner's: the retired
+            # row was in the draw, and the recorded winner must follow the
+            # live row. Done here, where in_pool is already known, because
+            # every re-issue passes through this branch: the judge flows and
+            # the late-entrant backfill after a member drop alike.
+            tournament.repoint_drawn_winner!(ticket) if in_pool
             affected_tournaments << tournament
           elsif tournament.format_biggest_vs_smallest?
             # Biggest vs Smallest: keep at most 2 placements per (entry, species) — the

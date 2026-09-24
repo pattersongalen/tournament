@@ -115,10 +115,15 @@ module Tournaments
         Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
       end
 
-      assert locks.any? { |sql| sql.include?('"tournament_entries"') },
+      entries_lock    = locks.index { |sql| sql.include?('"tournament_entries"') }
+      tournament_lock = locks.index { |sql| sql.include?('FROM "tournaments"') }
+      assert entries_lock,
              "the draw must take the entry locks PlaceInSlots and the judge flows take before writing a ticket"
-      assert_not locks.any? { |sql| sql.include?('FROM "tournaments"') },
-                 "a tournament row lock inverts against writers that lock entries first (deadlock)"
+      assert tournament_lock,
+             "the draw must also lock the tournament row: a ticket for an entry created after the entry pass " \
+             "(a late entrant) reads drawn_at under that row's key-share lock, and only this lock makes it wait"
+      assert tournament_lock > entries_lock,
+             "entries first, then the tournament row: the order every writer uses, so nothing inverts"
     end
 
     test "a forced re-draw re-stamps the pool from the tickets active now" do

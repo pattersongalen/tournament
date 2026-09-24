@@ -1528,6 +1528,30 @@ module Catches
       assert result[:ticket_withheld], "the species path withholds a ticket the same way the tag path does"
     end
 
+    test "reinstate after the draw of a fish DQ'd before it reports the withheld ticket" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      drawn = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                     tag_number: "A0001", captured_at_device: 2.hours.ago)
+      pulled = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                      tag_number: "A0002", captured_at_device: 100.minutes.ago)
+      Catches::PlaceInSlots.call(catch: drawn)
+      Catches::PlaceInSlots.call(catch: pulled)
+      ApplyJudgeAction.call(tournament: t, catch: pulled, judge: @judge, action: :disqualify, note: "dq")
+      Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @judge)
+
+      result = ApplyJudgeAction.call(tournament: t, catch: pulled, judge: @judge, action: :reinstate, note: "undo")
+
+      assert_not pulled.reload.disqualified?
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: pulled, active: true).count
+      assert result[:ticket_withheld], "the draw never saw this fish; the caller must hear it earned no ticket"
+    end
+
     test "manual_override tag add on a disqualified catch is not reported as withheld by the draw" do
       tagged = Species.find_or_create_by!(name: "Tagged Walleye")
       t = build(:tournament, club: @club, format: :tagged, mode: :solo,

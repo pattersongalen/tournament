@@ -220,6 +220,46 @@ class Judges::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_not @synced.reload.disqualified?
   end
 
+  test "reinstate and geofence_override after the draw say no ticket was issued for a fish the draw never saw" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    create(:tournament_judge, tournament: t, user: @judge)
+    angler = create(:user, club: @club)
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: angler)
+    drawn = create(:catch, user: angler, species: tagged, length_inches: 19.0,
+                   tag_number: "A0001", captured_at_device: 2.hours.ago)
+    pulled = create(:catch, user: angler, species: tagged, length_inches: 18.0,
+                    tag_number: "A0002", captured_at_device: 100.minutes.ago)
+    Catches::PlaceInSlots.call(catch: drawn)
+    Catches::PlaceInSlots.call(catch: pulled)
+    # DQ'd BEFORE the draw: its ticket is retired and never stamped.
+    Catches::ApplyJudgeAction.call(tournament: t, catch: pulled, judge: @judge, action: :disqualify, note: "dq")
+    Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @judge)
+
+    patch reinstate_judges_tournament_catch_path(tournament_id: t.id, id: pulled.id)
+    assert_redirected_to judges_tournament_catch_path(tournament_id: t.id, id: pulled.id)
+    assert_not pulled.reload.disqualified?
+    assert_equal 0, CatchPlacement.where(tournament: t, catch: pulled, active: true).count
+    assert_match(/no ticket was issued/, flash[:notice], "the judge must be told the reinstate earned no ticket")
+
+    # A correction that re-places the same fish reports it too.
+    patch geofence_override_judges_tournament_catch_path(tournament_id: t.id, id: pulled.id),
+          params: { override_in_lake: "1", override_in_sask: "1" }
+    assert_redirected_to judges_tournament_catch_path(tournament_id: t.id, id: pulled.id)
+    assert_match(/no ticket was issued/, flash[:notice])
+    follow_redirect!  # consume that flash so the next request's is read clean
+
+    # The drawn fish itself was in the pool: a correction re-issues its ticket, no notice.
+    patch geofence_override_judges_tournament_catch_path(tournament_id: t.id, id: drawn.id),
+          params: { override_in_lake: "1", override_in_sask: "1" }
+    assert_equal 1, CatchPlacement.where(tournament: t, catch: drawn, active: true).count
+    assert_nil flash[:notice]
+  end
+
   # --- Task 7: geofence-override + reinstate UI -------------------------------
 
   test "show renders the geofence override checkboxes reflecting current state" do

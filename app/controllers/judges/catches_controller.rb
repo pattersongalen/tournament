@@ -1,4 +1,6 @@
 class Judges::CatchesController < Judges::BaseController
+  include CatchUpdateNotice
+
   REVIEWER_ACTIONS = %i[index show geofence_override correct_location reinstate].freeze
 
   skip_before_action :require_judge!, only: REVIEWER_ACTIONS
@@ -17,37 +19,37 @@ class Judges::CatchesController < Judges::BaseController
   end
 
   def geofence_override
-    Catches::ApplyJudgeAction.call(
+    result = Catches::ApplyJudgeAction.call(
       tournament: @tournament, catch: @catch, judge: current_user,
       action: :geofence_override, note: params[:note],
       override_in_lake: params[:override_in_lake] == "1",
       override_in_sask: params[:override_in_sask] == "1"
     )
-    redirect_to_catch
+    redirect_to_catch(notice: ticket_withheld_notice(result))
   end
 
   def correct_location
-    Catches::ApplyJudgeAction.call(
+    result = Catches::ApplyJudgeAction.call(
       tournament: @tournament, catch: @catch, judge: current_user,
       action: :correct_location, note: params[:note],
       latitude: params[:latitude], longitude: params[:longitude]
     )
-    redirect_to_catch
+    redirect_to_catch(notice: ticket_withheld_notice(result))
   end
 
   def reinstate
     unless @catch.disqualified?
       return redirect_to_catch(alert: "Only a disqualified catch can be reinstated.")
     end
-    Catches::ApplyJudgeAction.call(
+    result = Catches::ApplyJudgeAction.call(
       tournament: @tournament, catch: @catch, judge: current_user, action: :reinstate, note: params[:note]
     )
-    redirect_to_catch
+    redirect_to_catch(notice: ticket_withheld_notice(result))
   end
 
   private
 
-  def redirect_to_catch(alert: nil)
-    redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id), alert: alert
+  def redirect_to_catch(alert: nil, notice: nil)
+    redirect_to judges_tournament_catch_path(tournament_id: @tournament.id, id: @catch.id), alert: alert, notice: notice
   end
 end

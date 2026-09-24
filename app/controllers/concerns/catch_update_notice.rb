@@ -12,4 +12,14 @@ module CatchUpdateNotice
     return "Catch updated." unless result[:ticket_withheld]
     "Tag saved. The draw already ran, so no ticket was issued for this catch."
   end
+
+  # The correction flows (reinstate, GPS fix, geofence override) re-place the
+  # catch; after the draw that only re-issues a ticket the draw drew from. A
+  # fish the draw never saw (a DQ undone after it) comes back with no ticket,
+  # and the judge must hear that rather than a bare redirect. nil when there
+  # is nothing to say, so the redirect sets no flash.
+  def ticket_withheld_notice(result)
+    return nil unless result[:ticket_withheld]
+    "Change applied. The draw already ran and this fish was not in it, so no ticket was issued."
+  end
 end

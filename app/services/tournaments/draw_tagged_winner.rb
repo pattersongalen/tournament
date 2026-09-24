@@ -21,18 +21,22 @@ module Tournaments
 
     def call
       winning_placement = ActiveRecord::Base.transaction do
-        # Serialize on the tournament's entries, not the tournament row.
-        # Every writer of a ticket (PlaceInSlots, the judge flows) holds the
-        # entry lock before it inserts or retires a row and before it reads
-        # drawn_at, so once these are held no ticket can appear or vanish
-        # between the snapshot and the stamp below, and a concurrent placement
-        # that had to wait for an entry sees this draw when it gets it. A
-        # tournament lock would invert against those writers (entry, then
-        # tournament) and deadlock. Ascending id, the order every lock_entries!
-        # uses. The reload after the locks sees a draw that committed while we
-        # waited, so a second tap can't draw twice.
+        # Serialize on the tournament's entries first, then the tournament
+        # row. Every writer of a ticket (PlaceInSlots, the judge flows) holds
+        # the entry lock before it inserts or retires a row, so once these are
+        # held no ticket on an existing entry can appear or vanish between the
+        # snapshot and the stamp below, and a concurrent placement that had to
+        # wait for an entry sees this draw when it gets it. An entry created
+        # after this pass (a late entrant added while the draw runs) is not
+        # held, so PlaceInSlots also reads drawn_at under a key-share lock on
+        # the tournament row: the FOR UPDATE taken here conflicts with it,
+        # making that ticket wait for the draw and see it. Ascending entry
+        # id, then the tournament: the order every writer uses (lock_entries!,
+        # then the row-level reads and the winner repoint), so nothing
+        # inverts. lock! reloads, so a draw that committed while we waited is
+        # seen and a second tap can't draw twice.
         @tournament.tournament_entries.order(:id).lock.pluck(:id)
-        @tournament.reload
+        @tournament.lock!
         raise WrongFormatError, "tournament format is not 'tagged'"                  unless @tournament.format_tagged?
         raise NotEndedError,    "tournament has not yet ended"                       unless @tournament.ended?
         raise AlreadyDrawnError, "already drawn (pass force: true to redraw)" if @tournament.drawn_at.present? && !@force
