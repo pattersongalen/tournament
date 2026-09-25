@@ -84,6 +84,56 @@ module Catches
       end
     end
 
+    test "a species change away from Tagged Walleye drops the tag even when the form leaves it in place" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 19, tag_number: "A0001",
+                    status: :needs_review)
+      result = Catches::ApplyJudgeAction.call(
+        tournament: @t, catch: fish, judge: @judge, action: :manual_override,
+        note: "mis-ID", species_id: @walleye.id, tag_number: "A0001"
+      )
+      assert_nil fish.reload.tag_number, "a tag only means something on a Tagged Walleye"
+      assert_equal "A0001", result[:tag_dropped], "the caller is told which tag the species change dropped"
+    end
+
+    test "an edit that keeps the tag reports no dropped tag" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 19, tag_number: "A0001",
+                    status: :needs_review)
+      result = Catches::ApplyJudgeAction.call(
+        tournament: @t, catch: fish, judge: @judge, action: :manual_override,
+        note: "length", length_inches: 20.0, tag_number: "A0001"
+      )
+      assert_equal "A0001", fish.reload.tag_number
+      assert_nil result[:tag_dropped]
+    end
+
+    test "a tag typed in the same submit as a species change away from Tagged Walleye is dropped too" do
+      # The editor keeps a populated tag field visible across a species switch,
+      # so a tag entered while Tagged Walleye was selected rides along with a
+      # submit that lands on Walleye. No stored tag to start with: the rule
+      # must key on the submitted tag as well.
+      fish = create(:catch, user: @user, species: @walleye, length_inches: 19, tag_number: nil,
+                    status: :needs_review)
+      result = Catches::ApplyJudgeAction.call(
+        tournament: @t, catch: fish, judge: @judge, action: :manual_override,
+        note: "typo", species_id: @pike.id, tag_number: "A123"
+      )
+      assert_equal @pike, fish.reload.species
+      assert_nil fish.tag_number, "a species that isn't Tagged Walleye never keeps a submitted tag"
+      assert_equal "A123", result[:tag_dropped], "a tag typed and then orphaned is reported as dropped too"
+    end
+
+    test "a retiring action on a fish that isn't a Tagged Walleye skips the draw-void reads" do
+      # Only a Tagged Walleye can hold a draw ticket, so a length fix on a plain
+      # fish has no draw to void and must not probe the winner pointer at all.
+      void_reads = count_queries(/drawn_winning_placement_id/) do
+        ApplyJudgeAction.call(tournament: @t, catch: @catch, judge: @judge,
+                              action: :manual_override, length_inches: 20.5, note: "re-measured")
+      end
+      assert_equal 0, void_reads, "expected no draw-void probe for a non-tagged fish, got #{void_reads}"
+    end
+
     test "snapshot reuses the loaded species across before/after instead of re-querying" do
       # The before/after snapshots should share one species read (the memoized
       # association) rather than each issuing its own Species.find_by. The lone
@@ -1099,6 +1149,584 @@ module Catches
 
       lens = entry.catch_placements.where(active: true).includes(:catch).map { |p| p.catch.length_inches.to_i }.sort
       assert_equal [17, 18, 19, 20, 30], lens, "the grown backup enters as the over; the 16 drops"
+    end
+
+    test "manual_override tag_number rewrites the science tag and records it in the audit row" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0, tag_number: "X1795\u201d")
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: " x1795 ", note: "typo", club: @club)
+      assert_equal "X1795", fish.reload.tag_number
+      audit = JudgeAction.where(catch_id: fish.id).order(:created_at).last
+      assert_equal "X1795\u201d", audit.before_state["tag_number"]
+      assert_equal "X1795", audit.after_state["tag_number"]
+    end
+
+    test "manual_override tag_number places a Tagged Walleye that was stranded by a blank tag" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                    tag_number: "TMP", captured_at_device: 30.minutes.ago)
+      fish.update_column(:tag_number, nil)
+      Catches::PlaceInSlots.call(catch: fish)
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+
+      result = ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                                     tag_number: "A0042", note: "tag added", club: @club)
+      assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+      assert_empty result[:tickets_withheld_in]
+    end
+
+    test "manual_override tag_number does not mint a ticket into a tagged tournament already drawn" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      ticket = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
+      t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
+
+      stranded = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                        tag_number: "TMP", captured_at_device: 90.minutes.ago)
+      stranded.update_column(:tag_number, nil)
+
+      result = ApplyJudgeAction.call(tournament: nil, catch: stranded, judge: @judge, action: :manual_override,
+                                     tag_number: "A0042", note: "tag from photo", club: @club)
+
+      assert_equal "A0042", stranded.reload.tag_number, "the tag itself is still recorded"
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: stranded).count,
+                   "the draw pool is closed once the winner is drawn"
+      assert ticket.reload.active
+      assert_equal [t.name], result[:tickets_withheld_in], "the caller is told where the tag saved without a ticket"
+    end
+
+    test "correct_location after the draw re-issues the winner's ticket instead of dropping it" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      ticket = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
+      t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
+
+      ApplyJudgeAction.call(tournament: nil, catch: winner, judge: @judge, action: :correct_location,
+                            latitude: winner.latitude, longitude: winner.longitude, note: "gps fix", club: @club)
+
+      reissued = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
+      assert_equal 1, CatchPlacement.where(tournament: t, catch: winner, active: true).count,
+                   "a post-draw correction must not strip a ticket that was in the draw"
+      assert_equal reissued.id, t.reload.drawn_winning_placement_id,
+                   "the recorded winner must point at the live ticket, not the retired row"
+      assert t.drawn_winning_placement.active?
+    end
+
+    test "reinstate after a forced re-draw re-issues a ticket the first draw drew from" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                    tag_number: "A0001", captured_at_device: 2.hours.ago)
+      other = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                     tag_number: "A0002", captured_at_device: 100.minutes.ago)
+      Catches::PlaceInSlots.call(catch: fish)
+      Catches::PlaceInSlots.call(catch: other)
+      Tournaments::DrawTaggedWinner.call(tournament: t, drawn_by: @judge)
+
+      # A wrong DQ after the draw, a re-draw over what is left, then the DQ undone.
+      ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :disqualify, note: "wrong call", club: @club)
+      Tournaments::DrawTaggedWinner.call(tournament: t, drawn_by: @judge, force: true)
+      result = ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :reinstate, club: @club)
+
+      reissued = CatchPlacement.find_by(tournament: t, catch: fish, active: true)
+      assert reissued, "a fish the first draw drew from is back in the pool once its DQ is undone"
+      assert reissued.in_draw_pool
+      assert_empty result[:tickets_withheld_in]
+      assert result[:ticket_reissued],
+             "the re-draw ran without this fish, so the organizer must hear that it is back on the leaderboard"
+      assert_equal 2, t.reload.draw_pool.count, "the organizer can re-draw over both fish"
+    end
+
+    test "reinstate hands PlaceInSlots the rows it already resolved to lock" do
+      ApplyJudgeAction.call(tournament: @t, catch: @catch, judge: @judge, action: :disqualify, note: "oops")
+
+      calls = 0
+      original = ::Tournaments::ActiveForUser.method(:with_entries)
+      ::Tournaments::ActiveForUser.define_singleton_method(:with_entries) do |**kwargs|
+        calls += 1
+        original.call(**kwargs)
+      end
+      begin
+        ApplyJudgeAction.call(tournament: @t, catch: @catch, judge: @judge, action: :reinstate)
+      ensure
+        ::Tournaments::ActiveForUser.define_singleton_method(:with_entries, original)
+      end
+
+      assert_equal 1, calls, "the entry set is resolved once, before the locks, not again inside PlaceInSlots"
+      assert_equal @catch.id, @entry.catch_placements.active.first&.catch_id
+    end
+
+    test "manual_override with a tag and a length fix loads the catch's placements once" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                    tag_number: "TMP", captured_at_device: 2.hours.ago)
+      fish.update_column(:tag_number, nil)
+
+      # The club-scoped rebuildable set is the only catch_placements read that
+      # joins tournaments; it feeds both the entry locks and the length reconcile.
+      rebuildable_reads = 0
+      counter = ->(_name, _start, _finish, _id, payload) do
+        sql = payload[:sql].to_s
+        rebuildable_reads += 1 if sql.start_with?("SELECT") && sql.include?('"catch_placements"') && sql.include?('INNER JOIN "tournaments"')
+      end
+      ActiveSupport::Notifications.subscribed(counter, "sql.active_record") do
+        ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                              tag_number: "A0042", length_inches: 19.0,
+                              note: "tag + length", club: @club)
+      end
+
+      assert_equal 1, rebuildable_reads
+      assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+      assert_equal 19.0, fish.reload.length_inches.to_f
+    end
+
+    test "reinstate after the draw restores the DQ'd fish's ticket" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                    tag_number: "A0001", captured_at_device: 2.hours.ago)
+      Catches::PlaceInSlots.call(catch: fish)
+      ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+      t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
+
+      ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :disqualify, note: "oops")
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+      result = ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :reinstate, note: "my mistake")
+
+      assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+      assert_equal CatchPlacement.find_by!(tournament: t, catch: fish, active: true).id,
+                   t.reload.drawn_winning_placement_id,
+                   "the recorded winner follows the reinstated fish onto its re-issued ticket"
+      assert_not result[:ticket_reissued], "the winner followed its ticket: nothing to check"
+    end
+
+    test "reinstate after the draw does not mint a ticket for a fish DQ'd before it" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                    tag_number: "A0001", captured_at_device: 2.hours.ago)
+      other = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                     tag_number: "A0002", captured_at_device: 100.minutes.ago)
+      Catches::PlaceInSlots.call(catch: fish)
+      Catches::PlaceInSlots.call(catch: other)
+
+      ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :disqualify, note: "wrong lake")
+      travel 1.minute do
+        winner = Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @judge)
+        assert_equal other.id, winner.catch_id, "the DQ'd fish is not in the pool"
+      end
+      travel 2.minutes do
+        ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :reinstate, note: "on reflection")
+      end
+
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
+                   "a fish out of the pool at the draw must not be listed as a ticket afterwards"
+    end
+
+    test "manual_override species round-trip after the draw re-issues the winner's ticket" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      ticket = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
+      t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
+
+      travel 1.minute do
+        ApplyJudgeAction.call(tournament: nil, catch: winner, judge: @judge, action: :manual_override,
+                              species_id: @walleye.id, tag_number: "", note: "mis-ID", club: @club)
+        assert_equal 0, CatchPlacement.where(tournament: t, catch: winner, active: true).count
+      end
+      travel 2.minutes do
+        ApplyJudgeAction.call(tournament: nil, catch: winner, judge: @judge, action: :manual_override,
+                              species_id: tagged.id, tag_number: "A0001", note: "it was tagged after all", club: @club)
+      end
+
+      assert_equal 1, CatchPlacement.where(tournament: t, catch: winner, active: true).count,
+                   "a fish that was in the draw keeps its ticket through a species round-trip"
+    end
+
+    test "manual_override with an unchanged tag_number leaves the tag alone" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0, tag_number: "A0001")
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: "a0001", note: "no change", club: @club)
+      assert_equal "A0001", fish.reload.tag_number
+    end
+    test "manual_override changes species away from Tagged Walleye and clears the tag in one submit" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0, tag_number: "A0042")
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            species_id: @walleye.id, tag_number: "", note: "mis-logged", club: @club)
+      fish.reload
+      assert_equal @walleye.id, fish.species_id
+      assert_nil fish.tag_number
+    end
+
+    def tagged_tournament_with_placed_fish
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                    tag_number: "X1795\u201d", captured_at_device: 30.minutes.ago)
+      Catches::PlaceInSlots.call(catch: fish)
+      [t, fish, CatchPlacement.find_by!(tournament: t, catch: fish, active: true)]
+    end
+
+    test "manual_override tag typo fix keeps the existing ticket instead of rebuilding it" do
+      t, fish, ticket = tagged_tournament_with_placed_fish
+      t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_column(:in_draw_pool, true)
+
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: "X1795", note: "typo", club: @club)
+
+      assert_equal "X1795", fish.reload.tag_number
+      assert ticket.reload.active, "the drawn ticket must survive a present-to-present tag edit"
+      assert_equal [ticket.id], CatchPlacement.where(tournament: t, catch: fish, active: true).pluck(:id)
+    end
+
+    test "manual_override re-saving the same tag does not touch placements" do
+      _t, fish, ticket = tagged_tournament_with_placed_fish
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: " x1795\u201d ", note: "", club: @club)
+      assert ticket.reload.active
+      assert_equal 1, CatchPlacement.where(catch: fish).count
+    end
+
+    # Fish Train [Walleye, Pike, Walleye]: three single-car groups, so a catch that
+    # is neither the current group's nor the next group's species is skipped, and
+    # a re-placed catch lands in the NEXT group rather than back where it was.
+    def walleye_pike_walleye_train(first_species: @walleye)
+      ft = build(:tournament, club: @club, format: :fish_train, mode: :solo,
+                 starts_at: 1.hour.ago, ends_at: 1.hour.from_now,
+                 train_cars: [first_species.id, @pike.id, first_species.id])
+      ft.scoring_slots.build(species: first_species, slot_count: 1)
+      ft.scoring_slots.build(species: @pike, slot_count: 1)
+      ft.save!
+      entry = create(:tournament_entry, tournament: ft)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      ft
+    end
+
+    def active_train(ft)
+      ft.catch_placements.active.order(:slot_index).pluck(:catch_id, :slot_index)
+    end
+
+    test "manual_override clearing a stray tag on a non-Tagged-Walleye catch leaves the train alone" do
+      ft = walleye_pike_walleye_train
+      car0 = create(:catch, user: @user, species: @walleye, length_inches: 12, tag_number: "A1",
+                    captured_at_device: 30.minutes.ago)
+      Catches::PlaceInSlots.call(catch: car0)
+      car1 = create(:catch, user: @user, species: @pike, length_inches: 20, captured_at_device: 25.minutes.ago)
+      Catches::PlaceInSlots.call(catch: car1)
+      assert_equal [[car0.id, 0], [car1.id, 1]], active_train(ft)
+      before_ids = ft.catch_placements.pluck(:id).sort
+
+      ApplyJudgeAction.call(tournament: nil, catch: car0, judge: @judge, action: :manual_override,
+                            tag_number: "", note: "stray tag", club: @club)
+
+      assert_nil car0.reload.tag_number
+      # A rebuild would deactivate car 0 (a permanent hole on this append-only
+      # format) and re-append the walleye at car 2 as the "next group" species.
+      assert_equal [[car0.id, 0], [car1.id, 1]], active_train(ft)
+      assert_equal before_ids, ft.catch_placements.pluck(:id).sort, "no placement rows rewritten"
+    end
+
+    test "manual_override adding a stray tag to a non-Tagged-Walleye catch does not re-place a bumped fish" do
+      ft = walleye_pike_walleye_train
+      small = create(:catch, user: @user, species: @walleye, length_inches: 12, captured_at_device: 30.minutes.ago)
+      Catches::PlaceInSlots.call(catch: small)
+      big = create(:catch, user: @user, species: @walleye, length_inches: 13, captured_at_device: 25.minutes.ago)
+      Catches::PlaceInSlots.call(catch: big)
+      pike = create(:catch, user: @user, species: @pike, length_inches: 20, captured_at_device: 20.minutes.ago)
+      Catches::PlaceInSlots.call(catch: pike)
+      assert_equal [[big.id, 0], [pike.id, 1]], active_train(ft), "the 13\" bumped the 12\" out of car 0"
+
+      ApplyJudgeAction.call(tournament: nil, catch: small, judge: @judge, action: :manual_override,
+                            tag_number: "B7", note: "tag noted late", club: @club)
+
+      assert_equal "B7", small.reload.tag_number
+      # A full PlaceInSlots re-run would see the bumped walleye as a fresh arrival
+      # and append it at car 2, out of capture order.
+      assert_equal [[big.id, 0], [pike.id, 1]], active_train(ft)
+    end
+
+    test "manual_override adding a tag re-places only into tagged tournaments" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      ft = walleye_pike_walleye_train(first_species: tagged)
+      tt = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                 starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      tt.scoring_slots.build(species: tagged, slot_count: 1)
+      tt.save!
+      tt_entry = create(:tournament_entry, tournament: tt)
+      create(:tournament_entry_member, tournament_entry: tt_entry, user: @user)
+
+      stranded = create(:catch, user: @user, species: tagged, length_inches: 12, tag_number: "TMP",
+                        captured_at_device: 30.minutes.ago)
+      stranded.update_column(:tag_number, nil)
+      Catches::PlaceInSlots.call(catch: stranded)
+      ticketed = create(:catch, user: @user, species: tagged, length_inches: 13, tag_number: "A2",
+                        captured_at_device: 25.minutes.ago)
+      Catches::PlaceInSlots.call(catch: ticketed)
+      pike = create(:catch, user: @user, species: @pike, length_inches: 20, captured_at_device: 20.minutes.ago)
+      Catches::PlaceInSlots.call(catch: pike)
+      assert_equal [[ticketed.id, 0], [pike.id, 1]], active_train(ft), "the 13\" bumped the stranded 12\""
+      assert_equal 0, CatchPlacement.where(tournament: tt, catch: stranded, active: true).count, "blank tag: no ticket"
+
+      ApplyJudgeAction.call(tournament: nil, catch: stranded, judge: @judge, action: :manual_override,
+                            tag_number: "A1", note: "tag found in the photo", club: @club)
+
+      assert_equal 1, CatchPlacement.where(tournament: tt, catch: stranded, active: true).count, "now ticketed"
+      assert_equal [[ticketed.id, 0], [pike.id, 1]], active_train(ft),
+                   "the tag add must not re-append the bumped fish to the train"
+    end
+
+    test "manual_override tag added together with a length change places the catch at the new length" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      fish = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                    tag_number: "TMP", captured_at_device: 30.minutes.ago)
+      fish.update_column(:tag_number, nil)
+
+      ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
+                            tag_number: "A0042", length_inches: 21.0, length_unit: "inches",
+                            note: "", club: @club)
+      fish.reload
+      assert_equal "A0042", fish.tag_number
+      assert_equal 21.0, fish.length_inches.to_f
+      assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+    end
+
+    test "deactivate_and_replace! re-reads the catch's placements under the entry locks" do
+      # A teammate's bigger fish syncs into @entry between this edit's snapshot
+      # of @catch's placements and its entry locks: it bumps @catch's slot-0
+      # row and takes the slot. A stale snapshot would then "free" the row a
+      # second time and promote the backup into a slot the 25 now holds.
+      backup = create(:catch, user: @user, species: @walleye, length_inches: 15, status: :synced)
+      Catches::PlaceInSlots.call(catch: backup)
+      bigger = create(:catch, user: @user, species: @walleye, length_inches: 25, status: :synced)
+
+      svc = ApplyJudgeAction.new(tournament: nil, catch: @catch, judge: @judge, action: :correct_location,
+                                 note: "gps fix", length_inches: nil, length_unit: nil, species_id: nil,
+                                 slot_index: nil, entry_id: nil, photo: nil, override_in_lake: nil,
+                                 override_in_sask: nil, latitude: @catch.latitude, longitude: @catch.longitude,
+                                 club: @club)
+      original = svc.method(:lock_entries!)
+      svc.define_singleton_method(:lock_entries!) do |ids|
+        original.call(ids)
+        Catches::PlaceInSlots.call(catch: bigger, broadcast: false)
+      end
+
+      assert_nothing_raised { svc.call }
+
+      active = @entry.catch_placements.active.to_a
+      assert_equal [bigger.id], active.map(&:catch_id), "the 25 keeps the only slot"
+      assert_equal 0, active.first.slot_index
+    end
+
+    test "manual_override species change to Tagged Walleye after the draw reports the withheld ticket" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @judge)
+
+      plain = create(:catch, user: @user, species: @walleye, length_inches: 18.0, captured_at_device: 90.minutes.ago)
+      result = ApplyJudgeAction.call(tournament: nil, catch: plain, judge: @judge, action: :manual_override,
+                                     species_id: tagged.id, tag_number: "A0042", note: "mis-ID", club: @club)
+
+      assert_equal tagged, plain.reload.species
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: plain).count
+      assert_equal [t.name], result[:tickets_withheld_in], "the species path withholds a ticket the same way the tag path does"
+    end
+
+    test "reinstate after the draw of a fish DQ'd before it reports the withheld ticket" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      drawn = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                     tag_number: "A0001", captured_at_device: 2.hours.ago)
+      pulled = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                      tag_number: "A0002", captured_at_device: 100.minutes.ago)
+      Catches::PlaceInSlots.call(catch: drawn)
+      Catches::PlaceInSlots.call(catch: pulled)
+      ApplyJudgeAction.call(tournament: t, catch: pulled, judge: @judge, action: :disqualify, note: "dq")
+      Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @judge)
+
+      result = ApplyJudgeAction.call(tournament: t, catch: pulled, judge: @judge, action: :reinstate, note: "undo")
+
+      assert_not pulled.reload.disqualified?
+      assert_equal 0, CatchPlacement.where(tournament: t, catch: pulled, active: true).count
+      assert_equal [t.name], result[:tickets_withheld_in], "the draw never saw this fish; the caller must hear it earned no ticket"
+    end
+
+    test "manual_override tag add on a disqualified catch is not reported as withheld by the draw" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @judge)
+
+      dq = create(:catch, user: @user, species: tagged, length_inches: 18.0, tag_number: "TMP",
+                  captured_at_device: 90.minutes.ago, status: :disqualified)
+      dq.update_column(:tag_number, nil)
+      result = ApplyJudgeAction.call(tournament: nil, catch: dq, judge: @judge, action: :manual_override,
+                                     tag_number: "A0042", note: "tag from photo", club: @club)
+
+      assert_equal "A0042", dq.reload.tag_number
+      assert_empty result[:tickets_withheld_in], "a DQ'd catch earns no ticket regardless of the draw"
+    end
+
+    # A drawn tagged tournament with the winner and one other ticket; the
+    # winner's fish is returned so the test can retire or restore its ticket.
+    def drawn_tagged_tournament
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @user)
+      winner = create(:catch, user: @user, species: tagged, length_inches: 19.0,
+                      tag_number: "A0001", captured_at_device: 2.hours.ago)
+      other = create(:catch, user: @user, species: tagged, length_inches: 18.0,
+                     tag_number: "A0002", captured_at_device: 100.minutes.ago)
+      Catches::PlaceInSlots.call(catch: winner)
+      Catches::PlaceInSlots.call(catch: other)
+      t.reload
+      t.update_columns(drawn_winning_placement_id: CatchPlacement.find_by!(tournament: t, catch: winner, active: true).id,
+                       drawn_at: Time.current)
+      CatchPlacement.where(tournament: t).update_all(in_draw_pool: true)
+      [t, winner, other]
+    end
+
+    test "disqualify on the drawn winner reports the draw as voided" do
+      t, winner, other = drawn_tagged_tournament
+
+      result = ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :disqualify, note: "dq")
+
+      assert t.reload.drawn_winner_voided?
+      assert result[:draw_voided], "the judge must hear the draw is void, not a bare redirect"
+      assert_empty result[:tickets_withheld_in]
+
+      result = ApplyJudgeAction.call(tournament: t, catch: other, judge: @judge, action: :disqualify, note: "dq")
+      assert_not result[:draw_voided], "retiring a losing ticket voids nothing"
+    end
+
+    test "manual_override species change away from Tagged Walleye on the drawn winner reports the draw as voided" do
+      t, winner, _other = drawn_tagged_tournament
+
+      result = ApplyJudgeAction.call(tournament: nil, catch: winner, judge: @judge, action: :manual_override,
+                                     species_id: @walleye.id, tag_number: "", note: "mis-ID", club: @club)
+
+      assert_equal @walleye, winner.reload.species
+      assert t.reload.drawn_winner_voided?
+      assert result[:draw_voided]
+      assert_empty result[:tickets_withheld_in], "PlaceInSlots never reached the tagged branch, so nothing was withheld"
+    end
+
+    test "an action on the already-voided winner that retires nothing reports no void" do
+      t, winner, _other = drawn_tagged_tournament
+      ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :disqualify, note: "dq")
+      assert t.reload.drawn_winner_voided?
+
+      result = ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :flag, note: "look again")
+      assert_not result[:draw_voided], "the draw was void before this flag; the flag did not void it"
+
+      result = ApplyJudgeAction.call(tournament: nil, catch: winner, judge: @judge, action: :manual_override,
+                                     length_inches: 19.5, note: "re-measured", club: @club)
+      assert_not result[:draw_voided], "a length fix on the voided winner retires nothing"
+      assert t.reload.drawn_winner_voided?, "and the draw stays void"
+    end
+
+    test "reinstating the drawn winner after a post-draw DQ restores the draw and reports nothing" do
+      t, winner, _other = drawn_tagged_tournament
+      ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :disqualify, note: "dq")
+
+      result = ApplyJudgeAction.call(tournament: t, catch: winner, judge: @judge, action: :reinstate, note: "undo")
+
+      assert_not t.reload.drawn_winner_voided?, "the pool ticket is re-issued and the winner repointed"
+      assert_not result[:draw_voided]
+      assert_empty result[:tickets_withheld_in]
     end
   end
 end

@@ -28,6 +28,17 @@ class CatchTest < ActiveSupport::TestCase
     assert_equal ["imported_photo"], catch_record.reload.flags, "a repeat add must not duplicate the flag"
   end
 
+  test "remove_flag! drops the flag, mirrors the row, and is a no-op when absent" do
+    catch_record = create(:catch, user: @user, species: @walleye)
+    catch_record.add_flag!("no_draw_ticket")
+    Catch.where(id: catch_record.id).update_all("flags = flags || ARRAY['possible_duplicate']::text[]")
+    assert_equal 1, catch_record.remove_flag!("no_draw_ticket")
+    assert_equal ["possible_duplicate"], catch_record.flags, "the instance reflects the row, not its stale snapshot"
+    assert_not catch_record.changed?
+    assert_equal ["possible_duplicate"], catch_record.reload.flags
+    assert_equal 0, catch_record.remove_flag!("no_draw_ticket"), "removing an absent flag touches nothing"
+  end
+
   test "add_flag! does not clobber a flag added concurrently after the instance was loaded" do
     catch_record = create(:catch, user: @user, species: @walleye)
     # Simulate a second writer (e.g. a teammate's FlagDuplicates) appending a
@@ -35,6 +46,27 @@ class CatchTest < ActiveSupport::TestCase
     Catch.where(id: catch_record.id).update_all("flags = ARRAY['possible_duplicate']::text[]")
     catch_record.add_flag!("imported_photo")
     assert_equal %w[possible_duplicate imported_photo].sort, catch_record.reload.flags.sort
+  end
+
+  test "add_flag! refreshes the loaded instance's flags and bumped status without dirtying it" do
+    catch_record = create(:catch, user: @user, species: @walleye, status: :synced)
+    catch_record.add_flag!("no_draw_ticket")
+    assert_equal ["no_draw_ticket"], catch_record.flags, "the instance reports the flag it just wrote"
+    assert catch_record.synced?
+    catch_record.add_flag!("imported_photo", bump_to_review: true)
+    assert_equal %w[no_draw_ticket imported_photo], catch_record.flags
+    assert catch_record.needs_review?, "the SQL status bump is mirrored on the instance"
+    assert_not catch_record.changed?, "mirroring the row is not a pending change"
+  end
+
+  test "add_flag! mirrors the status the row holds, not the loaded snapshot" do
+    catch_record = create(:catch, user: @user, species: @walleye, status: :synced)
+    # A judge disqualified the row after this instance loaded it as synced.
+    Catch.where(id: catch_record.id).update_all(status: Catch.statuses["disqualified"])
+    catch_record.add_flag!("imported_photo", bump_to_review: true)
+    assert catch_record.disqualified?, "the row kept its DQ, so the instance must not claim needs_review"
+    assert_includes catch_record.flags, "imported_photo"
+    assert_not catch_record.changed?
   end
 
   test "add_flag! with bump_to_review only moves a synced catch to needs_review" do
@@ -233,6 +265,13 @@ class CatchTest < ActiveSupport::TestCase
     end
     assert_equal 0, judge_action_queries,
                  "disqualification_note should read the preloaded association, not re-query per row"
+  end
+
+  test "a whitespace-only tag_number is stored as nil, not spaces" do
+    user = create(:user)
+    plain = create(:species, name: "Perch")
+    c = create(:catch, user: user, species: plain, tag_number: "   ", length_inches: 10.0)
+    assert_nil c.reload.tag_number
   end
 
   test "tag_number is upcased, required for Tagged Walleye, and length checked" do

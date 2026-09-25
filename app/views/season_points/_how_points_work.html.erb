@@ -9,7 +9,7 @@
     <table class="w-full text-sm mb-2">
       <thead>
         <tr class="text-left text-slate-300 border-b border-slate-700">
-          <th class="px-2 py-1">Boats out</th>
+          <th class="px-2 py-1">Anglers out</th>
           <th class="px-2 py-1">Points by placement</th>
         </tr>
       </thead>
@@ -21,7 +21,7 @@
           </tr>
         <% end %>
         <% club.effective_season_points_bands.each do |band| %>
-          <% scale = Tournaments::PointsScale.call(club: club, entry_count: band[:sample]) %>
+          <% scale = Tournaments::PointsScale.ladder_for(club: club, angler_count: band[:sample]) %>
           <tr class="border-t border-slate-700">
             <td class="px-2 py-1"><%= band[:label] %></td>
             <td class="px-2 py-1 font-mono">
@@ -36,6 +36,7 @@
   <p class="text-slate-400 text-sm">
     Everyone who fishes earns <%= format_season_points(club.season_points_attendance) %> points
     for showing up. Placement points need at least
-    <%= club.season_points_min_entries %> <%= "entry".pluralize(club.season_points_min_entries) %>.
+    <%= club.season_points_min_entries %> <%= "entry".pluralize(club.season_points_min_entries) %>
+    (boats or teams) out, however many anglers are aboard.
   </p>
 </div>

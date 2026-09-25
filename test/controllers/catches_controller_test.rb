@@ -41,6 +41,29 @@ class CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "4 lbs 3oz", persisted.weight_text, "weight_text is permitted"
   end
 
+  test "POST /catches after the draw logs the catch and says no ticket was issued" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: @user)
+    t.update_columns(drawn_at: 30.minutes.ago)
+
+    # Logged during the night, synced after the organizer drew the winner.
+    post catches_path, params: {
+      catch: { species_id: tagged.id, length_inches: 18.5, captured_at_device: 2.hours.ago,
+               client_uuid: "client-late", tag_number: "A0009",
+               photo: fixture_file_upload("sample_walleye.jpg", "image/jpeg") }
+    }
+    assert_redirected_to root_path
+    assert_match(/no ticket was issued/, flash[:notice])
+    late = Catch.find_by!(client_uuid: "client-late")
+    assert_equal 0, late.catch_placements.active.count
+    assert_includes late.flags, "no_draw_ticket"
+  end
+
   test "POST /catches persists flags and status derived from the submitted GPS" do
     now = Time.current
     # The two rows are more than the 90s duplicate window apart so the second
@@ -246,6 +269,20 @@ class CatchesControllerTest < ActionDispatch::IntegrationTest
     get catch_path(catch_record.id, t: @tournament.id)
     assert_response :success, "judged tournament"
     assert_select "form[action=?]", review_path, 0, "judged: a non-judge organizer gets no actions"
+  end
+
+  test "show: the inline override form on a friendly tournament carries the science-tag field" do
+    catch_record = create(:catch, user: @user, species: @walleye, length_inches: 18.5)
+    Catches::PlaceInSlots.call(catch: catch_record)
+    sign_in_as(create(:user, club: @club, role: :organizer))
+
+    get catch_path(catch_record.id, t: @tournament.id)
+    assert_response :success
+    override_path = judges_tournament_catch_manual_override_path(tournament_id: @tournament.id, catch_id: catch_record.id)
+    assert_select "form[action=?]", override_path do
+      assert_select "input[name=tag_number]", 1, "species can be switched to Tagged Walleye, which requires a tag"
+    end
+    assert_select "form[action=?][data-controller~=tag-field]", override_path, 1
   end
 
   test "index lists only the signed-in member's catches and hides the possible-duplicate badge" do

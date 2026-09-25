@@ -5,10 +5,39 @@
   # entry's display_name (matches the standard leaderboard partial).
   winner_placement = tournament.drawn_winning_placement if tournament.drawn_at.present?
   winner_catch     = winner_placement&.catch
-  winning_entry_id = winner_placement&.tournament_entry_id
+  # Tournament#drawn_winner_voided? / #tickets_remain? hold the rules (shared
+  # with the admin edit page); tickets_remain only matters once the draw is void.
+  # Guarded on the winner resolved above: a recorded winner with no draw time
+  # is no winner here, so it can't be a void one either.
+  winner_void    = winner_placement.present? && tournament.drawn_winner_voided?
+  tickets_remain = winner_void && tournament.tickets_remain?
+  # A void draw has no winner to highlight: the retired row still names an
+  # entry, but its row must not wear the winner colour under the void banner.
+  winning_entry_id = winner_placement&.tournament_entry_id unless winner_void
+  can_draw    = current_user&.organizer_in?(tournament.club) && tournament.ended?
 %>
 <div id="leaderboard">
-  <% if winner_catch %>
+  <% if winner_void %>
+    <div class="bg-rose-900/30 border border-rose-700/40 rounded-lg p-4 mb-4">
+      <p class="text-sm text-rose-200 uppercase tracking-wide">Draw void</p>
+      <p class="text-rose-100 mt-1">
+        <%# last_known_tag_number: a species change away from Tagged Walleye is
+            one way the ticket goes, and it drops the tag with it. %>
+        The drawn fish (<%= winner_catch.user.name %>, tag <%= winner_catch.last_known_tag_number %>)
+        no longer holds a ticket.
+        <% if tickets_remain %>
+          An organizer needs to re-draw.
+        <% else %>
+          No other tickets remain, so there is nothing to re-draw.
+        <% end %>
+      </p>
+    </div>
+    <% if can_draw && tickets_remain %>
+      <%= button_to "Re-draw winner", draw_organizers_tournament_path(tournament, force: 1),
+                    method: :post, data: { turbo_confirm: "Re-roll the draw among the remaining tickets?" },
+                    class: "mb-4 inline-flex h-10 px-4 items-center justify-center rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold" %>
+    <% end %>
+  <% elsif winner_catch %>
     <div class="bg-amber-900/30 border border-amber-700/40 rounded-lg p-4 mb-4">
       <p class="text-sm text-amber-200 uppercase tracking-wide">Winner</p>
       <p class="text-xl text-amber-100 font-semibold mt-1">
@@ -33,7 +62,7 @@
     </div>
   <% end %>
 
-  <% if current_user&.organizer_in?(tournament.club) && tournament.ended? && tournament.drawn_at.nil? %>
+  <% if can_draw && tournament.drawn_at.nil? %>
     <%= button_to "Draw winner", draw_organizers_tournament_path(tournament),
                   method: :post, data: { turbo_confirm: "Run the draw now?" },
                   class: "mb-4 inline-flex h-10 px-4 items-center justify-center rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold" %>

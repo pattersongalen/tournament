@@ -82,6 +82,56 @@ class Tournament < ApplicationRecord
     format_standard? || format_big_fish_season? || format_fish_train?
   end
 
+  # The drawn fish's ticket can be retired after the draw (a DQ, a species
+  # correction to plain walleye). Resolved by catch, not by row: a GPS fix
+  # re-issues the ticket as a new row and the fish is still the winner, and
+  # a winner recorded before the FK followed re-issued rows still resolves.
+  def drawn_winner_voided?
+    winner = drawn_winning_placement
+    winner.present? && !catch_placements.active.exists?(catch_id: winner.catch_id)
+  end
+
+  # The tickets a draw runs over: every active placement. The one definition
+  # Tournaments::DrawTaggedWinner draws from and the views' "re-draw" offer
+  # reads, so the button can't be shown for a pool the draw would refuse.
+  def draw_pool
+    catch_placements.active
+  end
+
+  # Whether a re-draw has anything to run over. With an empty pool the draw
+  # service refuses, so the views offer nothing rather than a button that
+  # fails.
+  def tickets_remain?
+    draw_pool.exists?
+  end
+
+  # After the drawn winner's ticket is retired and re-issued as a new row (a
+  # judge correction, or a member dropped from a boat and put on another with
+  # the backfill sweep), keep the recorded winner on the live row so anything
+  # trusting the FK sees an active ticket. Called by PlaceInSlots as it mints
+  # the row, the one place every re-issue passes through. One guarded UPDATE
+  # against the current DB value, so a stale in-memory winner is never
+  # written back and a ticket for any other fish touches no row (and takes no
+  # lock). Runs under the entry lock and the tournament key-share lock
+  # PlaceInSlots holds; DrawTaggedWinner takes both for update, so it can't
+  # race a draw.
+  def repoint_drawn_winner!(ticket)
+    updated = Tournament.where(id: id)
+                        .where(drawn_winning_placement_id: CatchPlacement.where(catch_id: ticket.catch_id).select(:id))
+                        .update_all(drawn_winning_placement_id: ticket.id)
+    # Mirror the SQL write on this object, as Catch#add_flag! does: PlaceInSlots
+    # broadcasts the tagged leaderboard from the tournament it placed into once
+    # its transaction commits, and that partial highlights the winner row by
+    # drawn_winning_placement. Left stale, the broadcast would still name the
+    # boat the retired ticket sat on.
+    if updated.positive?
+      write_attribute(:drawn_winning_placement_id, ticket.id)
+      clear_attribute_changes(%i[drawn_winning_placement_id])
+      association(:drawn_winning_placement).reset
+    end
+    updated
+  end
+
   # Other tournaments sharing this one's link group. Club-scoped as well as
   # group-scoped: a group id is generated per link, but scoping to the club
   # means a stray duplicate can never reach across clubs.

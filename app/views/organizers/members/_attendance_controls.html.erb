@@ -1,0 +1,22 @@
+<%# Filter box + sort toggle shared by the organizer and admin Attendance
+    pages; both sit inside a member-list Stimulus controller. %>
+<div class="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+  <label class="flex-1">
+    <span class="sr-only">Find a member</span>
+    <input type="search" placeholder="Find a member" autocomplete="off"
+           aria-label="Find a member"
+           data-member-list-target="query" data-action="input->member-list#filter"
+           class="w-full h-12 px-4 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500">
+  </label>
+  <%# The pressed look keys off aria-pressed, which the controller flips; the
+      colours live here only, so a restyle can't drift from the toggled state. %>
+  <% sort_button = "h-12 px-4 rounded-lg text-sm font-medium bg-slate-700 text-slate-300 aria-pressed:bg-blue-600 aria-pressed:text-white" %>
+  <div class="flex gap-2" role="group" aria-label="Sort by">
+    <button type="button" data-sort="nights" aria-pressed="true"
+            data-member-list-target="sortButton" data-action="member-list#sortBy"
+            class="<%= sort_button %>">Nights</button>
+    <button type="button" data-sort="name" aria-pressed="false"
+            data-member-list-target="sortButton" data-action="member-list#sortBy"
+            class="<%= sort_button %>">Name</button>
+  </div>
+</div>

@@ -57,6 +57,24 @@ module Tournaments
       end
     end
 
+    test "a precondition failure takes no row locks" do
+      # The entry locks block every live PlaceInSlots on the tournament, so a
+      # mis-tap on a running (or non-tagged) tournament must bounce off the
+      # guards before it queues anyone's catch behind a lock it only rolls back.
+      @t.update_columns(starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+      locks = []
+      probe = ->(_name, _start, _finish, _id, payload) do
+        sql = payload[:sql].to_s
+        locks << sql if sql.include?("FOR UPDATE")
+      end
+      ActiveSupport::Notifications.subscribed(probe, "sql.active_record") do
+        assert_raises(Tournaments::DrawTaggedWinner::NotEndedError) do
+          Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+        end
+      end
+      assert_empty locks, "a draw that fails its preconditions must not lock entries first"
+    end
+
     test "refuses a second draw without force" do
       Catches::PlaceInSlots.call(
         catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
@@ -82,6 +100,87 @@ module Tournaments
         assert_not_equal first_drawn_at, @t.drawn_at
         assert_kind_of CatchPlacement, second
       end
+    end
+
+    test "stamps every active ticket as the drawn pool and leaves retired rows out" do
+      live = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
+                      tag_number: "A001", captured_at_device: 90.minutes.ago)
+      )[:created].first
+      retired = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 17.0,
+                      tag_number: "A002", captured_at_device: 80.minutes.ago)
+      )[:created].first
+      CatchPlacement.where(id: retired.id).deactivate_all
+
+      Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+
+      assert live.reload.in_draw_pool, "an active ticket is in the pool the draw ran over"
+      assert_not retired.reload.in_draw_pool, "a ticket pulled before the draw was never in the pool"
+    end
+
+    test "draws from Tournament#draw_pool, the scope the re-draw button reads" do
+      ticket = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
+                      tag_number: "A001", captured_at_device: 90.minutes.ago)
+      )[:created].first
+      assert_equal [ticket.id], @t.draw_pool.pluck(:id)
+      assert @t.tickets_remain?
+
+      CatchPlacement.where(id: ticket.id).deactivate_all
+      assert_empty @t.draw_pool
+      assert_not @t.tickets_remain?, "the views offer no re-draw the service would refuse"
+      assert_raises(DrawTaggedWinner::NoEligibleCatchesError) do
+        DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+      end
+    end
+
+    test "serializes on the tournament's entries, the lock every ticket writer holds" do
+      Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
+                      tag_number: "A001", captured_at_device: 90.minutes.ago)
+      )
+      locks = []
+      probe = ->(_name, _start, _finish, _id, payload) do
+        sql = payload[:sql].to_s
+        locks << sql if sql.include?("FOR UPDATE")
+      end
+      ActiveSupport::Notifications.subscribed(probe, "sql.active_record") do
+        Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+      end
+
+      entries_lock    = locks.index { |sql| sql.include?('"tournament_entries"') }
+      tournament_lock = locks.index { |sql| sql.include?('FROM "tournaments"') }
+      assert entries_lock,
+             "the draw must take the entry locks PlaceInSlots and the judge flows take before writing a ticket"
+      assert tournament_lock,
+             "the draw must also lock the tournament row: a ticket for an entry created after the entry pass " \
+             "(a late entrant) reads drawn_at under that row's key-share lock, and only this lock makes it wait"
+      assert tournament_lock > entries_lock,
+             "entries first, then the tournament row: the order every writer uses, so nothing inverts"
+    end
+
+    test "a forced re-draw stamps the tickets active now and keeps an earlier draw's stamp on a retired row" do
+      first = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 18.0,
+                      tag_number: "A001", captured_at_device: 90.minutes.ago)
+      )[:created].first
+      second = Catches::PlaceInSlots.call(
+        catch: create(:catch, user: @user, species: @tagged, length_inches: 17.0,
+                      tag_number: "A002", captured_at_device: 80.minutes.ago)
+      )[:created].first
+      Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer)
+      assert first.reload.in_draw_pool && second.reload.in_draw_pool
+
+      # The first fish is pulled after the draw; the re-draw runs over what is left.
+      CatchPlacement.where(id: first.id).deactivate_all
+      Tournaments::DrawTaggedWinner.call(tournament: @t, drawn_by: @organizer, force: true)
+
+      assert first.reload.in_draw_pool,
+             "the first draw drew from this row: a reinstate after the re-draw must still find a stamped row, " \
+             "or the fish is gone with no organizer or judge action able to bring it back"
+      assert second.reload.in_draw_pool
+      assert_equal second.id, @t.reload.drawn_winning_placement_id
     end
 
     test "enqueues a push notification to the winner" do

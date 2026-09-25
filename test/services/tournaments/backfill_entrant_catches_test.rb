@@ -49,6 +49,54 @@ module Tournaments
              "the smaller earlier catch should have been placed then bumped, as live"
     end
 
+    test "tagged: re-adding the drawn winner after a member drop re-issues the ticket and repoints the winner" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+                starts_at: 4.hours.ago, ends_at: 1.hour.ago, backfill_late_entrants: true)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      organizer = create(:user, club: @club, role: :organizer)
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: @late_user)
+      fish = create(:catch, user: @late_user, species: tagged, length_inches: 19.0,
+                    tag_number: "A0001", captured_at_device: 3.hours.ago)
+      Catches::PlaceInSlots.call(catch: fish)
+      DrawTaggedWinner.call(tournament: t.reload, drawn_by: organizer)
+      old_ticket = t.reload.drawn_winning_placement
+      assert old_ticket.in_draw_pool
+
+      # Dropped from the boat after the draw (no judge action), then put on
+      # another boat with the backfill sweep.
+      Catches::DropMemberFromEntry.call(entry: entry, user: @late_user)
+      assert t.reload.drawn_winner_voided?
+      new_entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: new_entry, user: @late_user)
+
+      # Snapshot at broadcast time: the object handed over may be `t` itself,
+      # which the assertions below reload.
+      broadcast_winner_ids = []
+      original = Placements::BroadcastLeaderboard.method(:call)
+      Placements::BroadcastLeaderboard.define_singleton_method(:call) do |**kwargs|
+        broadcast_winner_ids << kwargs[:tournament].drawn_winning_placement_id
+        original.call(**kwargs)
+      end
+      begin
+        BackfillEntrantCatches.call(tournament: t, users: [@late_user])
+      ensure
+        Placements::BroadcastLeaderboard.define_singleton_method(:call, original)
+      end
+
+      reissued = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+      assert_equal new_entry.id, reissued.tournament_entry_id
+      assert reissued.in_draw_pool, "the fish was in the draw; the re-issued row says so"
+      assert_equal reissued.id, t.reload.drawn_winning_placement_id,
+                   "the recorded winner must follow the live ticket, not stay on the boat the member left"
+      assert_not t.drawn_winner_voided?
+      assert_equal [reissued.id], broadcast_winner_ids,
+                   "the post-commit broadcast must render the winner row from the repointed ticket, " \
+                   "not from the object loaded before the sweep"
+    end
+
     test "second run is a no-op" do
       create(:catch, user: @late_user, species: @walleye,
              length_inches: 20, captured_at_device: 3.hours.ago)

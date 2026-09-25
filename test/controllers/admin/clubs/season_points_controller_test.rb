@@ -182,4 +182,30 @@ class Admin::Clubs::SeasonPointsControllerTest < ActionDispatch::IntegrationTest
     token = SignInToken.issue!(user: user)
     get consume_session_path(token: token.token)
   end
+  test "preview table shows the field sizes below the entry minimum as attendance only" do
+    @target_club.update!(season_points_min_entries: 5)
+    sign_in_as(@admin)
+    get edit_admin_club_season_points_path(@target_club)
+    assert_response :success
+    rows = Nokogiri::HTML(response.body).css("tr")
+    below = rows.find { |tr| tr.text.include?("1–4 anglers") }
+    assert below, "expected a 1–4 anglers row in the preview"
+    assert_match "attendance only", below.text
+    assert rows.find { |tr| tr.text.include?("5–9 anglers") }, "expected the first paying band to start at the minimum"
+    assert_nil rows.find { |tr| tr.text.include?("1–9 anglers") }
+  end
+
+  # The per-band preview table used to feed the min-entries count into the
+  # full_field ladder, so every band row showed "3, 2, 1" and read as "full
+  # field pays three places". Full field has no band ladder to show.
+  test "full-field preview explains the scheme instead of a per-band ladder table" do
+    @target_club.update!(season_points_scheme: :full_field)
+    sign_in_as(@admin)
+    get edit_admin_club_season_points_path(@target_club)
+    assert_response :success
+    assert_includes response.body, "every boat that scores"
+    assert_no_match(/Anglers out/, response.body)
+    assert_no_match(/anglers<\/td>\s*<td[^>]*>\s*3, 2, 1/, response.body)
+  end
+
 end

@@ -175,6 +175,13 @@ module CatchesHelper
   # off a cheater or falsely accusing an honest member of one.
   REVIEW_ONLY_FLAGS = %w[possible_duplicate imported_photo screenshot_suspect].freeze
 
+  # Flags that record a fact about the catch without asking anyone to look at
+  # it (no_draw_ticket: a tagged fish that synced after the draw). They share
+  # the flags column with the review flags so the guarded add_flag! write and
+  # the filters work unchanged, but the views style them apart and never let
+  # one stand in for, or hide, a review state.
+  INFO_FLAGS = %w[no_draw_ticket].freeze
+
   # Member-facing flag list: drops review-only flags unless the current viewer
   # is staff for this catch. The early return keeps the common case (no
   # review-only flag present) from issuing the can_review_catch? query.
@@ -185,6 +192,18 @@ module CatchesHelper
     flags - REVIEW_ONLY_FLAGS
   end
 
+  # The visible flags that put the catch in front of a judge. Both splits
+  # take the visible list when the caller already has it, so one badge cell
+  # runs the can_review_catch? walk once, not once per split.
+  def review_flags_for(catch_record, visible = visible_flags_for(catch_record))
+    visible - INFO_FLAGS
+  end
+
+  # The visible flags that only annotate the catch.
+  def info_flags_for(catch_record, visible = visible_flags_for(catch_record))
+    visible & INFO_FLAGS
+  end
+
   FLAG_LABELS = {
     "missing_gps"        => "no GPS",
     "clock_skew"         => "clock mismatch",
@@ -192,7 +211,8 @@ module CatchesHelper
     "out_of_province"    => "outside Saskatchewan",
     "possible_duplicate" => "possible duplicate",
     "imported_photo"     => "imported photo",
-    "screenshot_suspect" => "possible screenshot"
+    "screenshot_suspect" => "possible screenshot",
+    "no_draw_ticket"     => "no draw ticket"
   }.freeze
 
   def flag_label(flag)

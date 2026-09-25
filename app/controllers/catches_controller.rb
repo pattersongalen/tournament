@@ -1,5 +1,6 @@
 class CatchesController < ApplicationController
   include CatchHistoryFiltering
+  include CatchUpdateNotice
 
   before_action :require_sign_in!
   before_action :require_site_admin!, only: :reference_photo
@@ -121,8 +122,12 @@ class CatchesController < ApplicationController
     @catch.synced_at = Time.current
 
     if @catch.save && @catch.photo.attached?
-      Catches::RunPlacementPipeline.call(catch: @catch)
-      redirect_to root_path, notice: teammate ? "Catch logged for #{teammate.name}" : "Catch logged"
+      placements = Catches::RunPlacementPipeline.call(catch: @catch)
+      notice = teammate ? "Catch logged for #{teammate.name}." : "Catch logged."
+      # A tagged catch that arrives after the draw keeps its tag but earns no
+      # ticket; the shared notice says so in the same words the judge and
+      # organizer flows use, rather than letting it look like a normal entry.
+      redirect_to root_path, notice: catch_change_notice({ tickets_withheld_in: placements[:withheld].map(&:name) }, saved: notice)
     else
       @catch.errors.add(:photo, "is required") unless @catch.photo.attached?
       @teammate = teammate

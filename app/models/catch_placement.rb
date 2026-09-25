@@ -16,4 +16,13 @@ class CatchPlacement < ApplicationRecord
                           if: :active? }
 
   scope :active, -> { where(active: true) }
+
+  # Retire every row in the relation in one statement, stamping updated_at the
+  # way update! would so the audit trail records when the row was retired (a
+  # plain update_all leaves the stamp at creation time). Nothing scores off
+  # the stamp: whether a tagged ticket was in the draw is recorded on
+  # in_draw_pool by Tournaments::DrawTaggedWinner.
+  def self.deactivate_all
+    update_all(active: false, updated_at: ::Time.current)
+  end
 end

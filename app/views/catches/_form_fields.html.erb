@@ -16,12 +16,11 @@
      cap = Catch.length_cap_for(s)
      h[s.id] = cap if cap
    end %>
-<% tagged_species_id = all_species.find(&:tagged_walleye?)&.id %>
 
 <div data-controller="catch-form photo-capture video-capture"
      data-catch-form-csrf-token-value="<%= local_assigns.fetch(:csrf_token, "") %>"
      data-catch-form-caps-by-species-id-value="<%= length_caps.to_json %>"
-     data-catch-form-tagged-species-id-value="<%= tagged_species_id %>"
+     data-catch-form-tagged-species-id-value="<%= tagged_species_id(all_species) %>"
      data-catch-form-teammate-user-id-value="<%= teammate&.id %>"
      data-catch-form-video-required-value="<%= video_required %>"
      data-action="photo-capture:captured->catch-form#onPhotoCaptured

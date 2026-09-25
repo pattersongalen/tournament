@@ -30,11 +30,21 @@ class TaggedWalleyeTournamentTest < ApplicationSystemTestCase
     assert page.has_selector?("#catch_weight_text", visible: true, wait: 5),
            "after selecting Tagged Walleye: the weight input should be revealed"
 
+    fill_in "catch_tag_number", with: "A123"
+    fill_in "catch_weight_text", with: "3 lb"
+
     select "Walleye", from: "catch_species_id"
     assert page.has_no_selector?("#catch_tag_number", visible: true, wait: 5),
            "after selecting Walleye again: the tag-number input should be hidden"
     assert page.has_no_selector?("#catch_weight_text", visible: true, wait: 5),
            "after selecting Walleye again: the weight input should be hidden"
+    # Hidden is not enough: the submit reads the inputs whether or not they
+    # show, so a tag typed for Tagged Walleye and then hidden by a species
+    # switch would ride along on a plain Walleye.
+    assert_equal "", find("#catch_tag_number", visible: false).value,
+                 "switching away from Tagged Walleye should clear the hidden tag"
+    assert_equal "", find("#catch_weight_text", visible: false).value,
+                 "switching away from Tagged Walleye should clear the hidden weight"
   end
 
   private

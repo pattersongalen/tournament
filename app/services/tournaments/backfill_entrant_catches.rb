@@ -52,7 +52,7 @@ module Tournaments
       placed = 0
       candidates.each do |catch_record|
         result = ::Catches::PlaceInSlots.call(
-          catch: catch_record, broadcast: false, tournament: tournament
+          catch: catch_record, broadcast: false, tournaments: [tournament]
         )
         placed += 1 if result[:affected_tournaments].any?
       end
@@ -61,9 +61,16 @@ module Tournaments
       # inside its transaction, so firing here would broadcast placements a
       # later sibling's raise can still roll back. Runs immediately when
       # there is no outer transaction.
+      #
+      # Broadcast from a fresh load, not the handed-in object: the sweep
+      # placed through PlaceInSlots, which writes the tournament row in SQL
+      # (a re-issued pool ticket repoints drawn_winning_placement_id) on its
+      # own copy of the tournament. The tagged leaderboard highlights the
+      # winner row by that column, so rendering from the object loaded before
+      # the sweep would name the boat the member was dropped from.
       if placed.positive?
         ::ActiveRecord.after_all_transactions_commit do
-          ::Placements::BroadcastLeaderboard.call(tournament: tournament)
+          ::Placements::BroadcastLeaderboard.call(tournament: ::Tournament.find(tournament.id))
         end
       end
       placed

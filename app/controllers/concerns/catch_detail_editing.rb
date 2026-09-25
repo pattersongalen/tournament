@@ -8,6 +8,7 @@
 module CatchDetailEditing
   extend ActiveSupport::Concern
   include LengthParamParsing
+  include CatchUpdateNotice
 
   included do
     before_action :load_editable_catch, only: [:show, :update]
@@ -26,15 +27,16 @@ module CatchDetailEditing
   end
 
   def update
-    Catches::ApplyJudgeAction.call(
+    result = Catches::ApplyJudgeAction.call(
       tournament: nil, catch: @catch, judge: current_user, action: :manual_override,
       note: params[:note],
       length_inches: resolved_length_inches(@catch),
       length_unit: resolved_length_unit,
       species_id: params[:species_id].presence&.to_i,
+      tag_number: params[:tag_number],
       club: current_club
     )
-    redirect_to url_for(action: :show, id: @catch.id), notice: "Catch updated."
+    redirect_to url_for(action: :show, id: @catch.id), notice: catch_change_notice(result, saved: "Catch updated.")
   end
 
   private

@@ -69,8 +69,8 @@
       <dd class="inline">
         <% if @catch.disqualified? %>
           <span class="text-red-400">disqualified</span>
-        <% elsif visible_flags_for(@catch).any? || @catch.latest_approver %>
-          <%= render "catches/flag_badges", catch_record: @catch %>
+        <% elsif (visible_flags = visible_flags_for(@catch)).any? || @catch.latest_approver %>
+          <%= render "catches/flag_badges", catch_record: @catch, visible_flags: visible_flags %>
         <% elsif @catch.needs_review? %>
           <span class="text-amber-400">needs review</span>
         <% else %>
@@ -174,7 +174,8 @@
     <% end %>
 
     <%= form_with url: judges_tournament_catch_manual_override_path(tournament_id: @action_tournament.id, catch_id: @catch.id),
-                  local: true, class: "space-y-3", data: { controller: "length-edit" } do |f| %>
+                  local: true, class: "space-y-3",
+                  data: { controller: "length-edit tag-field", tag_field_tagged_species_id_value: tagged_species_id } do |f| %>
       <%
         # Seed the unit toggle from the catch's own logged unit (not the viewing
         # judge's preference) so an untouched length round-trips to the same stored
@@ -193,6 +194,7 @@
       <label for="species_id" class="block text-xs text-slate-400">Species</label>
       <%= select_tag :species_id,
                      options_for_select(species_options, @catch.species_id),
+                     data: { action: "change->tag-field#toggle", "tag-field-target": "species" },
                      class: "w-full h-12 px-3 rounded-lg bg-slate-900 border border-slate-700 text-base text-slate-100" %>
 
       <label for="length" class="block text-xs text-slate-400">Length</label>
@@ -200,6 +202,9 @@
                            inputmode: "decimal",
                            data: { "length-edit-target": "input", "length-edit-unit": unit },
                            class: "w-full h-12 px-3 rounded-lg bg-slate-900 border border-slate-700 text-base text-slate-100" %>
+      <%= render "catches/tag_field", catch_record: @catch,
+                 label_class: "block text-xs text-slate-400",
+                 input_class: "w-full h-12 px-3 rounded-lg bg-slate-900 border border-slate-700 text-base text-slate-100 font-mono uppercase" %>
       <div class="flex gap-2 items-stretch justify-between">
         <div class="flex rounded-lg overflow-hidden border border-slate-700">
           <% User::LENGTH_UNITS.each do |u| %>

@@ -25,7 +25,7 @@ module Catches
         # when re-activating an inactive row that shares the target slot.
         @entry.catch_placements
               .where(species_id: @species.id, active: true)
-              .update_all(active: false)
+              .deactivate_all
 
         eligible = eligible_catches
         return if eligible.empty?

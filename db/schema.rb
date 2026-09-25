@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_20_201209) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_24_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -68,6 +68,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_20_201209) do
     t.boolean "active", default: true, null: false
     t.bigint "catch_id", null: false
     t.datetime "created_at", null: false
+    t.boolean "in_draw_pool", default: false, null: false
     t.integer "slot_index", null: false
     t.bigint "species_id", null: false
     t.bigint "tournament_entry_id", null: false

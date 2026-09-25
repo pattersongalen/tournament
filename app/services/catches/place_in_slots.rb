@@ -6,24 +6,43 @@ module Catches
     # shorter than the 90s floor deferRetry imposes before a client retries.
     IN_FLIGHT_WINDOW = 30.seconds
 
-    def self.call(catch:, broadcast: true, club: nil, tournament: nil)
-      new(catch: catch, broadcast: broadcast, club: club, tournament: tournament).call
+    def self.call(catch:, broadcast: true, club: nil, tournaments: nil, rows: nil)
+      new(catch: catch, broadcast: broadcast, club: club, tournaments: tournaments, rows: rows).call
     end
 
-    def initialize(catch:, broadcast: true, club: nil, tournament: nil)
+    def initialize(catch:, broadcast: true, club: nil, tournaments: nil, rows: nil)
       @catch = catch
       @broadcast = broadcast
+      # [{ tournament:, entry: }] already resolved by the caller (ApplyJudgeAction
+      # resolves the same set to lock its entries first). Saves re-running
+      # ActiveForUser under the row locks; the club/tournament scopes below
+      # still apply to it.
+      @rows = rows
       # When set (organizer/admin catch editor), only place into this club's
       # tournaments so a per-club edit never reshuffles another club's baskets.
       @club = club
-      # When set (late-entrant backfill), only place into this one tournament so
-      # a backfill sweep never touches other tournaments the user was active in
-      # during the same window.
-      @only_tournament = tournament
+      # When set, only place into these tournaments: the late-entrant backfill
+      # passes the one tournament it sweeps (never touching other tournaments
+      # the user was active in during the same window), and a science-tag edit
+      # passes every tagged tournament the catch reaches, in one run. An empty
+      # list places nowhere — it is a scope, not an absence of one.
+      @only_tournament_ids = tournaments&.map(&:id)
     end
 
     def call
       created, bumped = [], []
+      # Tournaments where only a closed draw pool kept this catch from a
+      # ticket. ApplyJudgeAction and the web form turn it into the "no ticket
+      # was issued in X" notice; nothing else reads it. Per tournament, not
+      # per catch: a fish can reach a drawn Main and a still-open Side at once.
+      withheld = []
+      # [tournament, ticket] pairs whose re-issued pool ticket may be the drawn
+      # winner's; repointed after the entry loop, in tournament-id order.
+      repoints = []
+      # Tournaments where a pool ticket was re-issued but the recorded winner
+      # did not follow it: the fish is back on the leaderboard, and whether the
+      # standing draw included it is the organizer's to check (see below).
+      reissued = []
       affected_tournaments = Set.new
       # Bingo only: the entry whose card this catch changes, keyed by tournament id,
       # so we rebroadcast just that angler's card rather than everyone's.
@@ -35,7 +54,7 @@ module Catches
       # placements at the same slot_index, corrupting the leaderboard.
       ActiveRecord::Base.transaction do
         @catch.lock!  # serialize with ApplyJudgeAction on the same catch
-        return { created: [], bumped: [], affected_tournaments: [], submitter: @catch.user } if @catch.disqualified?
+        return { created: [], bumped: [], withheld: [], reissued: [], affected_tournaments: [], submitter: @catch.user } if @catch.disqualified?
 
         # Tournament ids where this catch already holds an active placement.
         # A concurrent duplicate POST's dedup-reconcile can race the original
@@ -49,11 +68,10 @@ module Catches
           .where(catch_id: @catch.id, active: true)
           .distinct.pluck(:tournament_id).to_set
 
-        rows = Tournaments::ActiveForUser
-          .with_entries(user: @catch.user, at: @catch.captured_at_device)
+        rows = (@rows || Tournaments::ActiveForUser.with_entries(user: @catch.user, at: @catch.captured_at_device))
           .sort_by { |r| r[:entry].id }  # stable lock order across concurrent calls
         rows = rows.select { |r| r[:tournament].club_id == @club.id } if @club
-        rows = rows.select { |r| r[:tournament].id == @only_tournament.id } if @only_tournament
+        rows = rows.select { |r| @only_tournament_ids.include?(r[:tournament].id) } if @only_tournament_ids
 
         rows.each do |row|
           tournament = row[:tournament]
@@ -136,15 +154,63 @@ module Catches
           elsif tournament.format_tagged?
             # Tagged: every catch with a tag earns a fresh placement (= one ticket in
             # the draw). Mirrors Hidden Length — no bumping, slot_count irrelevant.
-            # Belt-and-suspenders skip if tag_number is blank; the Catch model
-            # validates presence for Tagged Walleye, so this only fires if a non-
-            # Tagged-Walleye species somehow slots into a tagged tournament.
-            next if @catch.tag_number.blank?
+            # Belt-and-suspenders: the tournament admits only a Tagged Walleye
+            # slot and the Catch model requires a tag on one, so this only
+            # fires if either is bypassed. Guarded on the species, not just
+            # the tag: a stray tag left on a plain walleye must never earn a
+            # ticket, or re-issue (and repoint the winner to) one below.
+            next unless @catch.species&.tagged_walleye? && @catch.tag_number.present?
+            # The draw pool closes when the winner is drawn. A catch arriving
+            # after that (a late offline sync, a science tag filled in from the
+            # photo the next day) keeps its tag but earns no ticket: it was
+            # never in the draw, and a fresh row would list it on the
+            # leaderboard as if it had been. A catch that held a ticket WHEN
+            # THE DRAW RAN was in the draw, so a post-draw re-placement (the
+            # judge flows deactivate before re-placing: a GPS fix, a geofence
+            # override, a DQ undone by reinstate) re-issues its ticket rather
+            # than stripping it — the drawn winner's row must survive a
+            # correction to the winning fish. Tournaments::DrawTaggedWinner
+            # stamps in_draw_pool on the rows it drew from; a fish with no
+            # stamped row (a pre-draw DQ reinstated the next day) was not in
+            # the draw, and a fresh row would list a fish the draw never saw.
+            #
+            # drawn_at is read from the DB here, not from the `tournament`
+            # loaded before the entry lock, and the read locks the tournament
+            # row FOR KEY SHARE. DrawTaggedWinner locks every entry and then
+            # the tournament row FOR UPDATE before it snapshots and stamps the
+            # pool, so a draw that committed while we waited for this entry is
+            # visible now, and a ticket for an entry the draw's entry pass never
+            # saw (a late entrant added during the draw) still waits on the row
+            # and sees the draw. Key-share is the weakest lock that conflicts
+            # with FOR UPDATE: it does not conflict with itself, so two runs
+            # placing across the same pair of tagged tournaments in opposite
+            # entry order can't deadlock on the rows, and it does not conflict
+            # with the plain UPDATE repoint_drawn_winner! runs after the loop.
+            # Locked after the entry, the order every writer uses.
+            #
+            # One query: whether the pool is closed, and whether this fish
+            # holds a stamped row in it (only meaningful once it is).
+            drawn, in_pool = ::Tournament.where(id: tournament.id).lock("FOR KEY SHARE")
+              .pick(Arel.sql("drawn_at IS NOT NULL"),
+                    CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id, in_draw_pool: true).arel.exists)
+            if drawn && !in_pool
+              withheld << tournament
+              next
+            end
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1
-            created << CatchPlacement.create!(
+            ticket = CatchPlacement.create!(
               catch: @catch, tournament: tournament, tournament_entry: entry,
-              species: @catch.species, slot_index: next_index, active: true
+              species: @catch.species, slot_index: next_index, active: true,
+              in_draw_pool: in_pool
             )
+            created << ticket
+            # A re-issued pool ticket may be the drawn winner's: the retired
+            # row was in the draw, and the recorded winner must follow the
+            # live row. Recorded here, where in_pool is already known, because
+            # every re-issue passes through this branch: the judge flows and
+            # the late-entrant backfill after a member drop alike. The write
+            # itself waits until the loop is done (see below).
+            repoints << [tournament, ticket] if in_pool
             affected_tournaments << tournament
           elsif tournament.format_biggest_vs_smallest?
             # Biggest vs Smallest: keep at most 2 placements per (entry, species) — the
@@ -398,6 +464,52 @@ module Catches
           end
         end
 
+        # The repoint is a plain UPDATE, which holds the tournament row FOR NO
+        # KEY UPDATE until commit. Issued inside the loop it would take those
+        # row locks in this run's entry order, and two runs re-issuing tickets
+        # across the same pair of drawn tagged tournaments (two judges
+        # correcting two fish at once, each fish on a different entry in each
+        # tournament) could take them in opposite order and deadlock. Every
+        # entry is locked by now, so issuing the writes here in tournament-id
+        # order gives all runs one lock order: entries first, then tournament
+        # rows ascending — the same entries-then-tournament order
+        # DrawTaggedWinner uses.
+        repoints.sort_by { |t, _| t.id }.each do |t, ticket|
+          # The stamp means "a draw drew from this fish", not "the standing
+          # draw did" (Tournaments::DrawTaggedWinner): a fish DQ'd after the
+          # first draw, left out of a forced re-draw, and then reinstated is
+          # re-issued a ticket and listed under a winner drawn without it.
+          # The repoint tells the two apart only for the winner's own fish;
+          # any other re-issue is reported so the organizer hears the fish is
+          # back on the leaderboard rather than reading a bare success.
+          reissued << t if t.repoint_drawn_winner!(ticket).zero?
+        end
+
+        # The member's own submission path (the API sync, the web form) reads
+        # nothing off the result, so the catch itself says it earned no
+        # ticket: a member-visible flag on the catch list and detail page, so
+        # a fish that synced after the draw isn't a tagged catch that silently
+        # never reached the leaderboard. A fact about the fish, not about one
+        # tournament: withheld in a drawn Main but ticketed in the still-open
+        # Side, it holds a ticket and is not flagged; ticketed later (entered
+        # late into another tagged tournament), the flag comes off. Both
+        # writes are guarded UPDATEs, so a re-run (a judge re-placement, the
+        # API's dedup retry) is a no-op. Informational: no bump to review.
+        # Reads the flag off the instance, which lock! reloaded above, so the
+        # common tagged run (a ticket, no flag, nothing withheld) issues no
+        # extra statement.
+        ticketed_now = created.any? { |p| p.tournament.format_tagged? }
+        flagged      = @catch.flags.include?("no_draw_ticket")
+        if withheld.any? || (ticketed_now && flagged)
+          holds_ticket = ticketed_now ||
+            CatchPlacement.active.where(catch_id: @catch.id, tournament_id: ::Tournament.format_tagged.select(:id)).exists?
+          if holds_ticket
+            @catch.remove_flag!("no_draw_ticket") if flagged
+          else
+            @catch.add_flag!("no_draw_ticket") unless flagged
+          end
+        end
+
         # Stamped inside the transaction so it commits atomically with the
         # placements above — that is the whole point of it existing alongside
         # placements_evaluated_at, which is written after the broadcast and so
@@ -414,7 +526,8 @@ module Catches
       # leak pre-commit state to other DB connections) and will issue its own
       # broadcast after its outer transaction commits. We skip both the leaderboard
       # rebroadcast and the notification dispatch in that case.
-      result = { created: created, bumped: bumped, affected_tournaments: affected_tournaments.to_a, submitter: @catch.user }
+      result = { created: created, bumped: bumped, withheld: withheld, reissued: reissued,
+                 affected_tournaments: affected_tournaments.to_a, submitter: @catch.user }
 
       if @broadcast
         # Build each affected leaderboard once and share it with both the

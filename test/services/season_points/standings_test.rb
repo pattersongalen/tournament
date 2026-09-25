@@ -146,6 +146,29 @@ module SeasonPoints
       end
     end
 
+    test "team tournament sizes the ladder by anglers aboard, not by boats" do
+      ends_at = 1.day.ago
+      t = create(:tournament, club: @club, mode: :team, awards_season_points: true,
+                 season_tag: "Wednesday 2026", starts_at: ends_at - 4.hours, ends_at: ends_at)
+      create(:scoring_slot, tournament: t, species: @walleye, slot_count: 2)
+
+      # 4 boats clears the 3-entry minimum; 12 anglers lands in the 10-19 band.
+      skippers = %w[TeamA TeamB TeamC TeamD].each_with_index.map do |prefix, i|
+        entry = create(:tournament_entry, tournament: t)
+        users = 3.times.map { |j| create(:user, club: @club, name: "#{prefix}-#{j}") }
+        users.each { |u| create(:tournament_entry_member, tournament_entry: entry, user: u) }
+        Catches::PlaceInSlots.call(catch: create(:catch, user: users.first, species: @walleye,
+                                                 length_inches: 25 - i, captured_at_device: ends_at - 1.hour))
+        users.first
+      end
+
+      by_id = Standings.call(club: @club, season_tag: "Wednesday 2026").index_by { |r| r[:user].id }
+      assert_equal 6.5, by_id[skippers[0].id][:points]
+      assert_equal 4.5, by_id[skippers[1].id][:points]
+      assert_equal 2.5, by_id[skippers[2].id][:points]
+      assert_equal 0.5, by_id[skippers[3].id][:points]
+    end
+
     test "a member-less entry doesn't lift a 2-team tournament over the cutoff" do
       ends_at = 1.day.ago
       t = create(:tournament, club: @club, mode: :team, awards_season_points: true,

@@ -1,6 +1,10 @@
 <h1 class="text-2xl font-semibold mt-4 mb-4">Members</h1>
-<%= link_to "Invite", new_organizers_member_path,
-            class: "inline-block h-12 px-4 leading-[3rem] rounded-lg bg-blue-600 text-white" %>
+<div class="flex gap-2">
+  <%= link_to "Invite", new_organizers_member_path,
+              class: "inline-block h-12 px-4 leading-[3rem] rounded-lg bg-blue-600 text-white" %>
+  <%= link_to "Attendance →", attendance_organizers_members_path,
+              class: "inline-block h-12 px-4 leading-[3rem] rounded-lg bg-slate-700 text-slate-100" %>
+</div>
 
 <ul class="mt-4 space-y-2">
   <% @users.each do |u| %>

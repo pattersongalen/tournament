@@ -5,11 +5,13 @@ module Tournaments
     # this service doesn't re-query per tournament. Left nil, each is computed
     # on demand.
     #
-    # Field size is the ENTRY count — boats/teams, not anglers — for both the
-    # tier bands and the full-field ladder. Only entries with at least one
-    # member count: an entry created before anyone was added, or one whose
-    # last member was removed, is not a competing team and must not lift a
-    # 2-team night over the club's minimum.
+    # Two field sizes feed PointsScale. The ENTRY count (boats/teams) decides
+    # whether placement points are paid at all and sizes the full-field
+    # ladder; the ANGLER count (distinct members aboard, so it derives from
+    # `member_ids`) picks the tier band. Only entries with at least one member
+    # count: an entry created before anyone was added, or one whose last
+    # member was removed, is not a competing team and must not lift a 2-team
+    # night over the club's minimum.
     #
     # The ladder is sized from the entry count but handed only to entries that
     # actually scored (QualifiedRows drops blanked entries), so under
@@ -26,7 +28,9 @@ module Tournaments
       club = tournament.club
       member_ids ||= member_ids_for(tournament)
       entry_count ||= tournament.tournament_entries.joins(:tournament_entry_members).distinct.count
-      scale = ::Tournaments::PointsScale.call(club: club, entry_count: entry_count) if scale == :compute
+      if scale == :compute
+        scale = ::Tournaments::PointsScale.call(club: club, entry_count: entry_count, angler_count: member_ids.size)
+      end
 
       awards = {}
       if scale

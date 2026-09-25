@@ -126,4 +126,45 @@ class Organizers::MembersControllerTest < ActionDispatch::IntegrationTest
     token = SignInToken.issue!(user: user)
     get consume_session_path(token: token.token)
   end
+
+  test "index links to the Attendance page instead of listing counts" do
+    create(:tournament, club: @club, awards_season_points: true, season_tag: "Wed 2026",
+                        starts_at: 1.week.ago, ends_at: 1.week.ago + 3.hours)
+    get organizers_members_path
+    assert_response :success
+    assert_select "a[href='#{attendance_organizers_members_path}']"
+    assert_select "[data-role='main-nights']", count: 0
+  end
+
+  test "attendance lists active members by Main nights this season, most first, and skips deactivated ones" do
+    ralph = create(:user, club: @club, role: :member, name: "Regular Ralph")
+    zed   = create(:user, club: @club, role: :member, name: "Zed Zero")
+    gone  = create(:user, club: @club, role: :member, name: "Gone Gary", deactivated_at: 1.day.ago)
+    2.times do |i|
+      night = create(:tournament, club: @club, mode: :team, awards_season_points: true, season_tag: "Wed 2026",
+                                  starts_at: (i + 1).weeks.ago, ends_at: (i + 1).weeks.ago + 3.hours)
+      entry = create(:tournament_entry, tournament: night)
+      create(:tournament_entry_member, tournament_entry: entry, user: ralph)
+      create(:tournament_entry_member, tournament_entry: entry, user: gone)
+    end
+
+    get attendance_organizers_members_path
+    assert_response :success
+    assert_select "[data-role='member']", count: 3   # Ralph, Zed, the organizer
+    names = css_select("[data-role='member']").map { |li| li["data-name"] }
+    assert_equal "Regular Ralph", names.first
+    assert_select "[data-role='member'][data-name='Regular Ralph'][data-nights='2']"
+    assert_select "[data-role='member'][data-name='Zed Zero'][data-nights='0']"
+    assert_select "[data-role='member'][data-name='Gone Gary']", count: 0
+    assert_match(/Wed 2026/, response.body)
+  end
+
+  test "attendance says so when the club has no season" do
+    create(:user, club: @club, role: :member, name: "Regular Ralph")
+    get attendance_organizers_members_path
+    assert_response :success
+    assert_select "[data-role='member']", count: 0
+    assert_match(/No season/i, response.body)
+  end
+
 end

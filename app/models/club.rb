@@ -13,18 +13,17 @@ class Club < ApplicationRecord
        prefix: :season_points_scheme,
        default: :tiered_ladders
 
-  # Fixed field-size bands, by entry (boat/team) count. The last band is
-  # open-ended so a big night can't fall through a hole.
+  # Fixed field-size bands, by ANGLER count (distinct people who fished, not
+  # boats/teams — see Tournaments::PointsScale). The last band is open-ended
+  # so a big night can't fall through a hole.
   SEASON_POINTS_BANDS = [1..9, 10..19, 20..29, 30..Float::INFINITY].freeze
 
   # Single source of truth for the band labels and a representative sample
-  # field size, derived from SEASON_POINTS_BANDS. Used by the admin editor
+  # angler count, derived from SEASON_POINTS_BANDS. Used by the admin editor
   # (labels + preview table) and the member-facing "how points work"
   # explainer so all three can't drift out of sync with each other or with
   # the bands themselves. The sample is the TOP of each band (the open-ended
-  # last band uses its lower bound instead) — not a mid-band number — so a
-  # raised season_points_min_entries can't make a band that genuinely does
-  # pay placement points look like it never pays.
+  # last band uses its lower bound instead).
   def self.season_points_bands
     SEASON_POINTS_BANDS.map { |band| band_row(band.begin, band) }
   end
@@ -38,12 +37,17 @@ class Club < ApplicationRecord
   end
   private_class_method :band_row
 
-  # The bands as THIS club actually pays them: the first band starts at
-  # season_points_min_entries (a club with a minimum of 5 pays the 1–9 ladder
-  # to 5–9-entry nights, and a 4-boat night is attendance only), and any band
-  # that falls wholly below the minimum is dropped. The admin preview and the
-  # member-facing explainer both read this so their labels can't promise
-  # placement points for a field size the minimum rules out.
+  # The bands as THIS club can actually pay them. The bands count anglers and
+  # the minimum counts entries, but every entry has at least one angler
+  # aboard, so a night never has fewer anglers than entries: a night below
+  # the minimum in anglers is below it in entries too and can't place. So
+  # the first band starts at season_points_min_entries (a minimum of 5 pays
+  # the 1–9 ladder to 5–9-angler nights at the earliest) and any band wholly
+  # below the minimum is dropped. The admin preview and the member-facing
+  # explainer both read this so no row promises placement points to a field
+  # the minimum rules out. A night at or above the minimum in anglers can
+  # still fall short in entries (one boat, five aboard): the prose beside the
+  # table states the entry rule.
   def effective_season_points_bands
     min = season_points_min_entries.to_i
     SEASON_POINTS_BANDS.filter_map do |band|
@@ -53,7 +57,7 @@ class Club < ApplicationRecord
     end
   end
 
-  # Field sizes the minimum rules out entirely ("1–4" for a minimum of 5),
+  # Angler counts the minimum rules out entirely ("1–4" for a minimum of 5),
   # or nil when every field size can place.
   def season_points_attendance_only_label
     min = season_points_min_entries.to_i

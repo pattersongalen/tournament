@@ -105,13 +105,13 @@ class SeasonPointsControllerTest < ActionDispatch::IntegrationTest
     {
       "tiered ladder (default scheme)" => {
         scheme: nil,
-        present: [ "How points are awarded", "9, 6, 3" ],
+        present: [ "How points are awarded", "9, 6, 3", "Anglers out" ],
         absent: []
       },
       "full-field scheme has no ladder table" => {
         scheme: :full_field,
         present: [ "every boat that scores" ],
-        absent: [ "Boats out" ]
+        absent: [ "Anglers out" ]
       }
     }.each do |label, row|
       club = create(:club)
@@ -130,26 +130,6 @@ class SeasonPointsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
-  # FIX 5 regression: the explainer used to sample a fixed mid-band size (6)
-  # for the 1–9 row. With season_points_min_entries raised to 8, that sampled
-  # size fell below the minimum and rendered "—", telling members a 1–9 boat
-  # night never pays placement points even though an 8- or 9-boat night does.
-  # Sampling the TOP of the band (9) fixes it.
-  test "standings page explainer shows the band still pays after a raised minimum" do
-    @club.update!(season_points_min_entries: 8)
-    create(:tournament, club: @club, awards_season_points: true, season_tag: "Spring 2026",
-           starts_at: 6.days.ago, ends_at: 5.days.ago)
-    sign_in_member!
-    get season_points_path
-    assert_response :success
-    # The band is now labelled from the minimum ("8–9", not "1–9") — see
-    # Club#effective_season_points_bands — and must still show its ladder.
-    row = Nokogiri::HTML(response.body).css("tr").find { |tr| tr.text.include?("8–9") }
-    assert row, "expected an 8–9 row in the explainer table"
-    assert_not_includes row.text, "—"
-    assert_match "3, 2, 1", row.text
-  end
-
   test "standings page reports a customised attendance value and minimum" do
     @club.update!(season_points_attendance: 1, season_points_min_entries: 5)
     create(:tournament, club: @club, awards_season_points: true, season_tag: "Spring 2026",
@@ -161,15 +141,23 @@ class SeasonPointsControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "5 entries"
   end
 
-  test "standings page explainer labels the first band from the club's minimum and shows the attendance-only range" do
+  # The ladder bands count anglers while the minimum counts entries, but every
+  # entry carries at least one angler, so angler counts below the minimum can
+  # never pay placement points: the table must not advertise a ladder for them.
+  test "standings page explainer clips the first angler band to the entry minimum" do
     @club.update!(season_points_min_entries: 5)
     create(:tournament, club: @club, awards_season_points: true, season_tag: "Spring 2026",
            starts_at: 6.days.ago, ends_at: 5.days.ago)
     sign_in_member!
     get season_points_path
     assert_response :success
-    assert_includes response.body, "5–9", "first band starts at the minimum"
-    assert_not_includes response.body, "1–9", "the unclipped label would promise points a 4-boat night never pays"
-    assert_includes response.body, "1–4", "the attendance-only range is spelled out"
+    rows = Nokogiri::HTML(response.body).css("tr")
+    below = rows.find { |tr| tr.text.include?("1–4") }
+    assert below, "expected a 1–4 anglers row"
+    assert_match "attendance only", below.text
+    paying = rows.find { |tr| tr.text.include?("5–9") }
+    assert paying, "expected the first paying band to start at the minimum"
+    assert_match "3, 2, 1", paying.text
+    assert_nil rows.find { |tr| tr.text.include?("1–9") }, "no row may promise a ladder to a field the minimum rules out"
   end
 end

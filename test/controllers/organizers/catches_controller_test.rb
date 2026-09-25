@@ -131,6 +131,23 @@ class Organizers::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_response :not_found
   end
 
+  test "index shows an informational flag in its own style and never hides a needs-review state" do
+    sign_in_as(@organizer)
+    create(:catch, user: @member, flags: %w[no_draw_ticket], status: :synced,
+                   captured_at_device: 2.hours.ago)
+    flagged = create(:catch, user: @member, flags: %w[no_draw_ticket], status: :needs_review,
+                     captured_at_device: 1.hour.ago)
+
+    get organizers_catches_path
+    assert_response :success
+    assert_select "[data-flag='no_draw_ticket']", count: 2
+    assert_select "[data-flag='no_draw_ticket'].bg-amber-900\\/40", { count: 0 }, "informational, not a review badge"
+    cards = css_select("ul > li")
+    card_for = ->(c) { cards.find { |li| li.css("a[href='#{organizers_catch_path(c.id)}']").any? } }
+    assert_match(/needs review/, card_for.call(flagged).text, "the informational flag must not hide the review state")
+    assert_equal 1, cards.count { |li| li.text.include?("needs review") }, "only the judge-flagged catch needs review"
+  end
+
   test "index links each catch to its detail page" do
     sign_in_as(@organizer)
     get organizers_catches_path
@@ -142,5 +159,99 @@ class Organizers::CatchesControllerTest < ActionDispatch::IntegrationTest
   def sign_in_as(user)
     token = SignInToken.issue!(user: user)
     get consume_session_path(token: token.token)
+  end
+
+  test "organizer can correct a Tagged Walleye science tag" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    fish = create(:catch, user: @member, species: tagged, length_inches: 18.0, tag_number: "X1795\u201d")
+    sign_in_as(@organizer)
+    patch organizers_catch_path(fish.id), params: {
+      species_id: tagged.id, length: "18", length_unit: "inches", tag_number: "X1795", note: "typo"
+    }
+    assert_redirected_to organizers_catch_path(fish.id)
+    assert_equal "X1795", fish.reload.tag_number
+  end
+
+  test "changing the drawn winner's species away from Tagged Walleye says the draw is void" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    walleye = Species.find_or_create_by!(name: "Walleye")
+    t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: @member)
+    drawn = create(:catch, user: @member, species: tagged, length_inches: 19.0,
+                   tag_number: "A0001", captured_at_device: 2.hours.ago)
+    Catches::PlaceInSlots.call(catch: drawn)
+    Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @organizer)
+
+    sign_in_as(@organizer)
+    patch organizers_catch_path(drawn.id), params: {
+      species_id: walleye.id, length: "19", length_unit: "inches", tag_number: "", note: "mis-ID"
+    }
+    assert_redirected_to organizers_catch_path(drawn.id)
+    assert_equal walleye, drawn.reload.species
+    assert_match(/Catch updated\..*draw is void/, flash[:notice])
+  end
+
+  test "adding a tag after the draw says no ticket was issued" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: @member)
+    drawn = create(:catch, user: @member, species: tagged, length_inches: 19.0,
+                   tag_number: "A0001", captured_at_device: 2.hours.ago)
+    Catches::PlaceInSlots.call(catch: drawn)
+    Tournaments::DrawTaggedWinner.call(tournament: t.reload, drawn_by: @organizer)
+    stranded = create(:catch, user: @member, species: tagged, length_inches: 18.0,
+                      tag_number: "TMP", captured_at_device: 90.minutes.ago)
+    stranded.update_column(:tag_number, nil)
+
+    sign_in_as(@organizer)
+    patch organizers_catch_path(stranded.id), params: {
+      species_id: tagged.id, length: "18", length_unit: "inches", tag_number: "A0042", note: "from photo"
+    }
+
+    assert_redirected_to organizers_catch_path(stranded.id)
+    assert_match(/no ticket was issued/, flash[:notice])
+    assert_equal "A0042", stranded.reload.tag_number
+    assert_equal 0, CatchPlacement.where(tournament: t, catch: stranded).count
+  end
+
+  test "edit form shows the current science tag" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    fish = create(:catch, user: @member, species: tagged, length_inches: 18.0, tag_number: "A0042")
+    sign_in_as(@organizer)
+    get organizers_catch_path(fish.id)
+    assert_select "input[name=tag_number][value=A0042]"
+  end
+
+  test "blanking the tag on a Tagged Walleye redirects with the validation message" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    fish = create(:catch, user: @member, species: tagged, length_inches: 18.0, tag_number: "A0042")
+    sign_in_as(@organizer)
+    patch organizers_catch_path(fish.id), params: {
+      species_id: tagged.id, length: "18", length_unit: "inches", tag_number: "", note: ""
+    }
+    assert_redirected_to organizers_catch_path(fish.id)
+    assert_match(/required for Tagged Walleye/, flash[:alert])
+    assert_equal "A0042", fish.reload.tag_number
+  end
+  test "edit form hides the science tag field for a species that is not Tagged Walleye" do
+    fish = create(:catch, user: @member, length_inches: 18.0)
+    sign_in_as(@organizer)
+    get organizers_catch_path(fish.id)
+    assert_select "[data-tag-field-target='wrapper'].hidden input[name=tag_number]"
+  end
+
+  test "edit form shows the science tag field for a non-Tagged-Walleye catch that carries a stray tag" do
+    fish = create(:catch, user: @member, length_inches: 18.0, tag_number: "STRAY")
+    sign_in_as(@organizer)
+    get organizers_catch_path(fish.id)
+    assert_select "[data-tag-field-target='wrapper']:not(.hidden) input[name=tag_number][value=STRAY]"
   end
 end

@@ -909,6 +909,302 @@ module Catches
     assert_equal [0, 1, 2], placements.map(&:slot_index)
   end
 
+  test "tagged: a catch placed after the draw earns no ticket" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    first = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                   tag_number: "A0001", captured_at_device: 2.hours.ago)
+    PlaceInSlots.call(catch: first)
+    ticket = CatchPlacement.find_by!(tournament: t, catch: first, active: true)
+    t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+    ticket.update_column(:in_draw_pool, true)
+
+    late = create(:catch, user: user, species: tagged, length_inches: 17.0,
+                  tag_number: "A0002", captured_at_device: 90.minutes.ago)
+    result = PlaceInSlots.call(catch: late)
+
+    assert_equal 0, CatchPlacement.where(tournament: t, catch: late).count
+    assert_empty result[:affected_tournaments]
+  end
+
+  test "tagged: a catch re-placed after the draw keeps its ticket" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    PlaceInSlots.call(catch: fish)
+    ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+    t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+    ticket.update_column(:in_draw_pool, true)
+
+    # The judge flows deactivate before re-placing (correction, DQ -> reinstate).
+    ticket.update!(active: false)
+    result = PlaceInSlots.call(catch: fish)
+
+    reissued = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+    assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
+                 "a fish that was in the draw keeps a ticket after a post-draw re-placement"
+    assert reissued.in_draw_pool, "the re-issued ticket inherits the fish's place in the pool"
+    assert_equal reissued.id, t.reload.drawn_winning_placement_id,
+                 "the recorded winner follows the re-issued row wherever the re-placement came from"
+    assert_equal [t], result[:affected_tournaments]
+    placed_into = result[:affected_tournaments].first
+    assert_equal reissued.id, placed_into.drawn_winning_placement_id,
+                 "the run's own tournament object mirrors the repoint: the post-commit broadcast renders from it"
+    assert_equal reissued, placed_into.drawn_winning_placement
+    assert_not placed_into.changed?, "the mirror is a read-through of the SQL write, not a pending change"
+    assert_empty result[:reissued], "the winner followed its ticket: nothing for the organizer to check"
+  end
+
+  test "tagged: a pool ticket re-issued for a fish that is not the recorded winner is reported" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    winner = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                    tag_number: "A0001", captured_at_device: 2.hours.ago)
+    other = create(:catch, user: user, species: tagged, length_inches: 17.0,
+                   tag_number: "A0002", captured_at_device: 100.minutes.ago)
+    PlaceInSlots.call(catch: winner)
+    PlaceInSlots.call(catch: other)
+    CatchPlacement.where(tournament: t).update_all(in_draw_pool: true)
+    t.update_columns(drawn_winning_placement_id: CatchPlacement.find_by!(tournament: t, catch: winner).id,
+                     drawn_at: Time.current)
+
+    # The stamp says "a draw drew from this fish", not "the standing draw did":
+    # the recorded winner can't tell the organizer whether this fish was in it.
+    CatchPlacement.where(tournament: t, catch: other).deactivate_all
+    result = PlaceInSlots.call(catch: other)
+
+    assert CatchPlacement.exists?(tournament: t, catch: other, active: true)
+    assert_equal [t], result[:reissued], "a re-issue the winner did not follow is the organizer's to check"
+    assert_empty result[:withheld]
+  end
+
+  test "tagged: one run re-issuing across two drawn tournaments repoints both winners" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    tournaments = 2.times.map do
+      t = build(:tournament, club: club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      t
+    end
+    # Entries created in the opposite order to the tournaments, so the
+    # entry-id iteration order PlaceInSlots uses differs from tournament-id
+    # order: the repoint must land on both regardless of which came first.
+    tournaments.reverse.each do |t|
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: user)
+    end
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    PlaceInSlots.call(catch: fish)
+    tournaments.each do |t|
+      ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+      t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_columns(in_draw_pool: true, active: false)
+    end
+
+    result = PlaceInSlots.call(catch: fish)
+
+    assert_equal tournaments.map(&:id).sort, result[:affected_tournaments].map(&:id).sort
+    tournaments.each do |t|
+      reissued = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+      assert reissued.in_draw_pool
+      assert_equal reissued.id, t.reload.drawn_winning_placement_id,
+                   "tournament #{t.id}'s winner follows its own re-issued ticket"
+      assert_not t.drawn_winner_voided?
+    end
+  end
+
+  test "tagged: the draw state is read from the DB under the lock, not from the handed-in row" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    late = create(:catch, user: user, species: tagged, length_inches: 17.0,
+                  tag_number: "A0002", captured_at_device: 90.minutes.ago)
+    # The caller resolved its rows before a draw committed elsewhere: the
+    # in-memory tournament still says undrawn while the DB says drawn.
+    stale_rows = Tournaments::ActiveForUser.with_entries(user: user, at: late.captured_at_device)
+    assert_nil stale_rows.first[:tournament].drawn_at
+    t.update_columns(drawn_at: Time.current)
+
+    result = PlaceInSlots.call(catch: late, rows: stale_rows)
+
+    assert_empty result[:created], "a stale undrawn row must not mint a ticket into a drawn pool"
+    assert_equal 0, CatchPlacement.where(tournament: t, catch: late).count
+  end
+
+  test "tagged: the draw state is read with a key-share lock on the tournament, after the entry lock, in one query" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+
+    sql_log = []
+    probe = ->(_name, _start, _finish, _id, payload) { sql_log << payload[:sql].to_s }
+    ActiveSupport::Notifications.subscribed(probe, "sql.active_record") do
+      PlaceInSlots.call(catch: fish, broadcast: false)
+    end
+
+    entry_lock = sql_log.index { |sql| sql.include?('"tournament_entries"') && sql.include?("FOR UPDATE") }
+    tournament_reads = sql_log.each_index.select { |i| sql_log[i].match?(/SELECT .*FROM "tournaments"/) && sql_log[i].include?("drawn_at") }
+    assert entry_lock, "the entry lock must be taken"
+    assert_equal 1, tournament_reads.size, "one query decides drawn + in-pool, not a pick and an exists"
+    assert tournament_reads.first > entry_lock, "the tournament row is locked after the entry, never before"
+    assert_includes sql_log[tournament_reads.first], "FOR KEY SHARE",
+                    "the read must conflict with the draw's FOR UPDATE so a ticket can't slip between its snapshot and stamp"
+    assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+  end
+
+  test "tagged: re-placing a non-winning fish after the draw leaves the recorded winner alone" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    winner = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                    tag_number: "A0001", captured_at_device: 2.hours.ago)
+    other = create(:catch, user: user, species: tagged, length_inches: 17.0,
+                   tag_number: "A0002", captured_at_device: 100.minutes.ago)
+    PlaceInSlots.call(catch: winner)
+    PlaceInSlots.call(catch: other)
+    winning_ticket = CatchPlacement.find_by!(tournament: t, catch: winner, active: true)
+    CatchPlacement.where(tournament: t).update_all(in_draw_pool: true)
+    t.update_columns(drawn_winning_placement_id: winning_ticket.id, drawn_at: Time.current)
+
+    CatchPlacement.where(tournament: t, catch: other).deactivate_all
+    PlaceInSlots.call(catch: other)
+
+    assert_equal winning_ticket.id, t.reload.drawn_winning_placement_id
+  end
+
+  test "tagged: a fish whose ticket was pulled before the draw earns no ticket after it" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    PlaceInSlots.call(catch: fish)
+    ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+
+    # Pulled from the pool (a DQ) BEFORE the draw ran: the row exists, but the
+    # draw never stamped it. A later write to the retired row (a backfill, a
+    # touch) must not change that: pool membership is a recorded fact, not a
+    # timestamp comparison.
+    CatchPlacement.where(id: ticket.id).deactivate_all
+    t.update_columns(drawn_winning_placement_id: nil, drawn_at: 30.minutes.ago)
+    ticket.update_column(:updated_at, Time.current)
+
+    result = PlaceInSlots.call(catch: fish)
+
+    assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
+                 "a fish that was out of the pool when the winner was drawn must not get a ticket now"
+    assert_empty result[:affected_tournaments]
+    assert_equal [t], result[:withheld]
+    # The member's own submission path reads nothing off the result, so the
+    # catch itself must say it earned no ticket: a member-visible flag.
+    assert_includes fish.reload.flags, "no_draw_ticket"
+    assert_not fish.needs_review?, "an informational flag, not a review trigger"
+
+    PlaceInSlots.call(catch: fish)
+    assert_equal 1, fish.reload.flags.count("no_draw_ticket"), "add_flag! is idempotent across re-runs"
+  end
+
+  test "tagged: withheld in one drawn tournament but ticketed in another is not flagged as ticketless" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    drawn, open = %w[Main Side].map do |name|
+      t = build(:tournament, club: club, name: name, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: user)
+      t
+    end
+    drawn.update_columns(drawn_at: 30.minutes.ago)
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+
+    result = PlaceInSlots.call(catch: fish)
+
+    assert_equal 0, CatchPlacement.where(tournament: drawn, catch: fish).count
+    assert_equal 1, CatchPlacement.where(tournament: open, catch: fish, active: true).count
+    assert_equal [drawn], result[:withheld], "withheld is a fact about the drawn tournament, not the fish"
+    assert_not_includes fish.reload.flags, "no_draw_ticket",
+                        "the fish holds a ticket in the Side, so it is not a ticketless fish"
+  end
+
+  test "tagged: the no_draw_ticket flag clears once a later run mints a ticket" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    # Flagged by an earlier run against a tournament whose draw had closed;
+    # the member is now entered late into one still open.
+    fish.add_flag!("no_draw_ticket")
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+
+    PlaceInSlots.call(catch: fish)
+
+    assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+    assert_not_includes fish.flags, "no_draw_ticket", "the instance mirrors the cleared flag"
+    assert_not_includes fish.reload.flags, "no_draw_ticket", "a fish holding a ticket is not ticketless"
+  end
+
   test "tagged: new catch after a placement is deactivated does not collide on slot_index" do
     club = create(:club)
     tagged = Species.find_or_create_by!(name: "Tagged Walleye")
@@ -1150,17 +1446,39 @@ module Catches
     assert_equal [0, 1, 2], active.order(:slot_index).pluck(:slot_index)
   end
 
-  test "tournament: scope places only into that tournament" do
+  test "tournaments: scope with one tournament places only into that tournament" do
     other = create(:tournament, club: @club, starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
     create(:scoring_slot, tournament: other, species: @walleye, slot_count: 2)
     other_entry = create(:tournament_entry, tournament: other)
     create(:tournament_entry_member, tournament_entry: other_entry, user: @user)
 
     catch_record = create(:catch, user: @user, species: @walleye, length_inches: 20)
-    PlaceInSlots.call(catch: catch_record, tournament: @tournament)
+    PlaceInSlots.call(catch: catch_record, tournaments: [@tournament])
 
     assert_equal [@tournament.id], catch_record.catch_placements.pluck(:tournament_id),
                  "scoped call must not place into the other overlapping tournament"
+  end
+
+  test "tournaments: scope places into exactly the listed tournaments" do
+    other = create(:tournament, club: @club, starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+    create(:scoring_slot, tournament: other, species: @walleye, slot_count: 2)
+    other_entry = create(:tournament_entry, tournament: other)
+    create(:tournament_entry_member, tournament_entry: other_entry, user: @user)
+    third = create(:tournament, club: @club, starts_at: 1.hour.ago, ends_at: 1.hour.from_now)
+    create(:scoring_slot, tournament: third, species: @walleye, slot_count: 2)
+    third_entry = create(:tournament_entry, tournament: third)
+    create(:tournament_entry_member, tournament_entry: third_entry, user: @user)
+
+    catch_record = create(:catch, user: @user, species: @walleye, length_inches: 20)
+    PlaceInSlots.call(catch: catch_record, tournaments: [@tournament, third])
+
+    assert_equal [@tournament.id, third.id].sort, catch_record.catch_placements.pluck(:tournament_id).sort
+  end
+
+  test "tournaments: with an empty list places nowhere" do
+    catch_record = create(:catch, user: @user, species: @walleye, length_inches: 20)
+    PlaceInSlots.call(catch: catch_record, tournaments: [])
+    assert_equal 0, catch_record.catch_placements.count
   end
 
   end

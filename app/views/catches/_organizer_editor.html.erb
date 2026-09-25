@@ -22,11 +22,13 @@
   </div>
 </div>
 
-<h2 class="text-lg font-semibold mb-2">Edit species &amp; length</h2>
+<h2 class="text-lg font-semibold mb-2">Edit species, length &amp; tag</h2>
 <%= form_with url: url_for(action: :update, id: catch_record.id), method: :patch,
-              local: true, data: { controller: "length-edit" } do %>
+              local: true, data: { controller: "length-edit tag-field",
+                                   tag_field_tagged_species_id_value: tagged_species_id } do %>
   <%= label_tag :species_id, "Species", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
   <%= select_tag :species_id, options_for_select(species_options, catch_record.species_id),
+                 data: { action: "change->tag-field#toggle", "tag-field-target": "species" },
                  class: "w-full h-12 px-3 rounded-lg bg-slate-800 border border-slate-700 text-base text-slate-100" %>
 
   <%= label_tag :length, "Length", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
@@ -47,6 +49,10 @@
       </label>
     <% end %>
   </div>
+
+  <%= render "catches/tag_field", catch_record: catch_record,
+             label_class: "block text-sm font-medium text-slate-300 mt-4 mb-1",
+             input_class: "w-full h-12 px-3 rounded-lg bg-slate-800 border border-slate-700 text-base text-slate-100 font-mono uppercase" %>
 
   <%= label_tag :note, "Note (optional)", class: "block text-sm font-medium text-slate-300 mt-4 mb-1" %>
   <%= text_area_tag :note, nil, rows: 3,

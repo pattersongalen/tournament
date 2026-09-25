@@ -39,26 +39,78 @@ class Catch < ApplicationRecord
     in_geofence?(:lake)
   end
 
-  # Atomically add `flag` to the flags array in a single UPDATE (no-op if it's
-  # already present). The previous `flags + [...]` then `update_columns` pattern
-  # was a read-modify-write from an in-memory snapshot: two concurrent flag
-  # writers (e.g. FlagImportedPhotoJob and a teammate's FlagDuplicates touching
-  # the same row) could each read the old array and clobber the other's flag.
-  # `array_append` in one statement closes that window. When `bump_to_review` is
-  # set, a still-synced catch is moved to needs_review in the same statement —
-  # guarded on the *current* status so a concurrent judge decision is never
-  # overwritten. Does not refresh this in-memory instance.
+  # Add `flag` to the flags array in one guarded UPDATE against the row's
+  # current flags: two writers appending different flags (FlagImportedPhotoJob
+  # and a teammate's FlagDuplicates on the same row) never clobber each other
+  # the way a read-modify-write from an in-memory snapshot would, and a
+  # repeat add is a no-op. With `bump_to_review`, a still-synced catch moves
+  # to needs_review in the same statement, guarded on the row's *current*
+  # status so a concurrent judge decision is never overwritten.
+  #
+  # The loaded instance is then brought in line with what the row now holds,
+  # read back from the statement itself (RETURNING) rather than inferred from
+  # this instance's stale snapshot: a row a judge disqualified after this
+  # instance loaded it keeps its status, and the mirror says so. Mirrored as
+  # a fact, not a pending change: the API create response and the catch
+  # views read flags/status off this instance after placement, and a later
+  # save must not re-send them. When the row already carried the flag the
+  # statement touches nothing and only the flag is mirrored; any other flag
+  # the row holds that this instance never loaded is deliberately left alone
+  # (the concurrent-writer guarantee is about the row, not the snapshot).
+  # Returns the number of rows changed (0 or 1).
   def add_flag!(flag, bump_to_review: false)
-    quoted = self.class.connection.quote(flag)
-    set_sql = "flags = array_append(flags, #{quoted}::text)"
+    set_sql = "flags = array_append(flags, ?::text)"
     if bump_to_review
       synced = self.class.statuses["synced"]
       review = self.class.statuses["needs_review"]
       set_sql += ", status = CASE WHEN status = #{synced} THEN #{review} ELSE status END"
     end
-    self.class.where(id: id)
-              .where.not("flags @> ARRAY[?]::text[]", flag)
-              .update_all(set_sql)
+    sql = self.class.sanitize_sql_array([
+      "UPDATE #{self.class.quoted_table_name} SET #{set_sql} " \
+      "WHERE id = ? AND NOT (flags @> ARRAY[?]::text[]) RETURNING flags, status",
+      flag, id, flag
+    ])
+    row = self.class.connection.exec_query(sql, "#{self.class.name} add_flag!").cast_values.first
+    if row
+      new_flags, new_status = row
+      write_attribute(:flags, new_flags)
+      write_attribute(:status, new_status)
+    else
+      write_attribute(:flags, Array(flags) | [flag])
+    end
+    clear_attribute_changes(%i[flags status])
+    row ? 1 : 0
+  end
+
+  # The inverse of add_flag!: one guarded UPDATE against the row's current
+  # flags, mirrored back from RETURNING the same way, so a flag another
+  # writer appended meanwhile survives and the instance reports what the row
+  # now holds. Status is never touched: a flag that has stopped being true
+  # (no_draw_ticket once a ticket is minted) says nothing about review.
+  # Returns the number of rows changed (0 or 1).
+  def remove_flag!(flag)
+    sql = self.class.sanitize_sql_array([
+      "UPDATE #{self.class.quoted_table_name} SET flags = array_remove(flags, ?::text) " \
+      "WHERE id = ? AND flags @> ARRAY[?]::text[] RETURNING flags",
+      flag, id, flag
+    ])
+    row = self.class.connection.exec_query(sql, "#{self.class.name} remove_flag!").cast_values.first
+    write_attribute(:flags, row ? row : Array(flags) - [flag])
+    clear_attribute_changes(%i[flags])
+    row ? 1 : 0
+  end
+
+  # The tag this fish carries, or carried: a species change away from Tagged
+  # Walleye drops the tag (Catches::ApplyJudgeAction), and the draw views
+  # still need to name the fish the winner was drawn from. The audit log
+  # snapshots the tag before every judge action, so the most recent
+  # snapshot that held one is the last tag the fish wore. One query, and
+  # only once the tag is gone.
+  def last_known_tag_number
+    tag_number.presence ||
+      judge_actions.where("COALESCE(before_state->>'tag_number', '') <> ''")
+                   .order(created_at: :desc, id: :desc)
+                   .pick(Arel.sql("before_state->>'tag_number'"))
   end
 
   enum :status, {
@@ -128,10 +180,26 @@ class Catch < ApplicationRecord
     judge_actions.select(&:disqualify?).max_by { |a| [a.created_at, a.id] }&.note
   end
 
+  # The stored form of a science tag: trimmed, upcased, blank -> nil. Public so
+  # editors can tell whether a submitted tag actually differs from the stored one
+  # before saving (and so the rule lives in exactly one place).
+  def self.normalize_tag(value)
+    value.to_s.strip.upcase.presence
+  end
+
+  # Max length (inches) for a species, or nil if the species is unbounded.
+  # Single source of truth for the cap lookup (validation, controller, views).
+  def self.length_cap_for(species)
+    return nil if species.nil?
+    MAX_LENGTH_BY_SPECIES[species.name.to_s.downcase]
+  end
+
   private
 
+  # Unconditional so a whitespace-only tag lands as nil (the form the editor's
+  # changed-tag comparison assumes), not as a string of spaces.
   def normalize_tag_number
-    self.tag_number = tag_number.to_s.strip.upcase if tag_number.present?
+    self.tag_number = self.class.normalize_tag(tag_number)
   end
 
   def default_length_unit
@@ -195,13 +263,6 @@ class Catch < ApplicationRecord
     if video.byte_size.to_i > VIDEO_MAX_BYTES
       errors.add(:video, "is larger than #{VIDEO_MAX_BYTES / 1.megabyte}MB")
     end
-  end
-
-  # Max length (inches) for a species, or nil if the species is unbounded.
-  # Single source of truth for the cap lookup (validation, controller, views).
-  def self.length_cap_for(species)
-    return nil if species.nil?
-    MAX_LENGTH_BY_SPECIES[species.name.to_s.downcase]
   end
 
   def length_within_species_cap

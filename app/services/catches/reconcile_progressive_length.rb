@@ -34,7 +34,7 @@ module Catches
         # up one without any sentinel dance.
         @entry.catch_placements
               .where(species_id: @species.id, active: true)
-              .update_all(active: false)
+              .deactivate_all
 
         rungs = ProgressiveLength::Ladder.call(eligible_catches)
         placements = rungs.each_with_index.map do |catch_record, slot_index|

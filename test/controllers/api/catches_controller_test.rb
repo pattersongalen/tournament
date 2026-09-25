@@ -56,6 +56,30 @@ class Api::CatchesControllerTest < ActionDispatch::IntegrationTest
     assert_includes JSON.parse(response.body)["flags"], "missing_gps"
   end
 
+  test "POST /api/catches after the draw returns the no_draw_ticket flag the row carries" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: @club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: @user)
+    t.update_columns(drawn_at: 30.minutes.ago)
+
+    post "/api/catches", params: {
+      catch: { species_id: tagged.id, length_inches: 18.5, captured_at_device: 2.hours.ago.iso8601,
+               captured_at_gps: 2.hours.ago.iso8601, latitude: 49.41, longitude: -103.62, gps_accuracy_m: 8,
+               client_uuid: "uuid-late", tag_number: "A0009",
+               photo: fixture_file_upload("sample_walleye.jpg", "image/jpeg") }
+    }, headers: { "Accept" => "application/json" }
+    assert_response :created
+    body = JSON.parse(response.body)
+    assert_includes body["flags"], "no_draw_ticket", "the response must match what the catch list will show"
+    assert_equal "synced", body["status"], "informational: no bump to review"
+    assert_empty body["placements"]
+    assert_includes Catch.find_by!(client_uuid: "uuid-late").flags, "no_draw_ticket"
+  end
+
   # Merges: "missing GPS flags catch as needs_review", "clock skew > threshold
   # flags as needs_review", "out-of-bounds GPS flags catch as needs_review",
   # "POST /api/catches persists flags on the catch record".

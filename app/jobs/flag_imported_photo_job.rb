@@ -21,8 +21,9 @@ class FlagImportedPhotoJob < ApplicationJob
     # override a human decision. A synced catch a judge has already acted on was
     # deliberately approved; re-opening it here would silently undo the approval
     # (and leave no JudgeAction trail), so only bump untouched catches. Computed
-    # once from the original state — add_flag! does not refresh this instance,
-    # and the SQL bump is itself guarded on the *current* status.
+    # once from the original state (the first add_flag! may move the status to
+    # needs_review; the second must still bump on the same basis), and the SQL
+    # bump is itself guarded on the *current* status.
     bump = catch_record.status == "synced" && !catch_record.judge_actions.exists?
 
     # Decode the photo once; both detectors below read the same blob via vips,

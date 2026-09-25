@@ -67,7 +67,8 @@ class CatchesHelperTest < ActionView::TestCase
   test "flag_label renders known flags with friendly text" do
     {
       "out_of_province"    => "outside Saskatchewan",
-      "screenshot_suspect" => "possible screenshot"
+      "screenshot_suspect" => "possible screenshot",
+      "no_draw_ticket"     => "no draw ticket"
     }.each do |flag, label_text|
       assert_equal label_text, flag_label(flag), flag
     end
@@ -82,6 +83,13 @@ class CatchesHelperTest < ActionView::TestCase
       define_singleton_method(:can_review_catch?) { |_| can_review }
       assert_equal expected, visible_flags_for(catch_record), "can_review_catch?=#{can_review}"
     end
+  end
+
+  test "review_flags_for and info_flags_for split the visible flags by whether they call for review" do
+    define_singleton_method(:can_review_catch?) { |_| true }
+    catch_record = Catch.new(flags: %w[no_draw_ticket missing_gps])
+    assert_equal %w[missing_gps], review_flags_for(catch_record)
+    assert_equal %w[no_draw_ticket], info_flags_for(catch_record)
   end
 
   # --- JPEG-variant photo display helpers (iOS HEIC support) ---

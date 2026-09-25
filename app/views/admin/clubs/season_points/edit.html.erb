@@ -1,8 +1,9 @@
 <div class="mb-6">
   <h1 class="text-3xl font-bold">Season points — <%= @foreign_club.name %></h1>
   <p class="text-slate-400 mt-1">
-    Field size counts <strong>entries</strong> — boats or teams, not anglers. Changes apply to the
-    whole current season the next time standings are viewed.
+    Ladder bands count <strong>anglers</strong> — the people who fished, not boats. The minimum
+    below counts <strong>entries</strong> — boats or teams. Changes apply to the whole current
+    season the next time standings are viewed.
   </p>
 </div>
 
@@ -60,7 +61,7 @@
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <% Club.season_points_bands.each_with_index do |band, i| %>
         <div>
-          <label class="block text-sm text-slate-400 mb-1"><%= band[:label] %> entries</label>
+          <label class="block text-sm text-slate-400 mb-1"><%= band[:label] %> anglers</label>
           <%= text_field_tag "club[season_points_ladders_text][]", @foreign_club.season_points_ladder_text(i),
                 class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100 font-mono" %>
         </div>
@@ -96,31 +97,42 @@
 
 <div class="mt-10">
   <h2 class="text-xl font-semibold mb-2">What the saved settings pay</h2>
-  <p class="text-slate-400 text-sm mb-3">Placement points only. Every angler who fished also gets
+  <p class="text-slate-400 text-sm mb-3">Placement points only, on nights with at least
+    <%= @preview_club.season_points_min_entries %> <%= "entry".pluralize(@preview_club.season_points_min_entries) %>.
+    Every angler who fished also gets
     <%= format_season_points(@preview_club.season_points_attendance) %> attendance points.</p>
-  <table class="w-full text-base">
-    <thead>
-      <tr class="text-left text-sm text-slate-300 border-b border-slate-700">
-        <th class="px-3 py-2">Field size</th>
-        <th class="px-3 py-2">Points by placement</th>
-      </tr>
-    </thead>
-    <tbody>
-      <% if (below = @preview_club.season_points_attendance_only_label) %>
-        <tr class="border-t border-slate-700">
-          <td class="px-3 py-3"><%= below %> entries</td>
-          <td class="px-3 py-3 font-mono">attendance only</td>
+  <% if @preview_club.season_points_scheme_full_field? %>
+    <%# Full field has no band ladder to tabulate: it pays one rung per
+        boat, so the angler bands above don't apply. %>
+    <p class="text-slate-300 text-base">
+      In full-field scoring, every boat that scores earns points based on placement.
+      With 8 boats out, first place gets 8, second 7, and so on down the field.
+    </p>
+  <% else %>
+    <table class="w-full text-base">
+      <thead>
+        <tr class="text-left text-sm text-slate-300 border-b border-slate-700">
+          <th class="px-3 py-2">Anglers out</th>
+          <th class="px-3 py-2">Points by placement</th>
         </tr>
-      <% end %>
-      <% @preview_club.effective_season_points_bands.each do |band| %>
-        <% scale = Tournaments::PointsScale.call(club: @preview_club, entry_count: band[:sample]) %>
-        <tr class="border-t border-slate-700">
-          <td class="px-3 py-3"><%= band[:label] %> entries</td>
-          <td class="px-3 py-3 font-mono">
-            <%= scale ? scale.map { |amount| format_season_points(amount) }.join(", ") : "attendance only" %>
-          </td>
-        </tr>
-      <% end %>
-    </tbody>
-  </table>
+      </thead>
+      <tbody>
+        <% if (below = @preview_club.season_points_attendance_only_label) %>
+          <tr class="border-t border-slate-700">
+            <td class="px-3 py-3"><%= below %> anglers</td>
+            <td class="px-3 py-3 font-mono">attendance only</td>
+          </tr>
+        <% end %>
+        <% @preview_club.effective_season_points_bands.each do |band| %>
+          <% scale = Tournaments::PointsScale.ladder_for(club: @preview_club, angler_count: band[:sample]) %>
+          <tr class="border-t border-slate-700">
+            <td class="px-3 py-3"><%= band[:label] %> anglers</td>
+            <td class="px-3 py-3 font-mono">
+              <%= scale ? scale.map { |amount| format_season_points(amount) }.join(", ") : "attendance only" %>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
 </div>

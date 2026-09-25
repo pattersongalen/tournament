@@ -157,9 +157,9 @@ module Tournaments
       teams.flatten.each { |u| assert_equal 0.5, result[u.id], "member #{u.id} should get only the attendance bonus" }
     end
 
-    test "team mode: 3 teams with 10 anglers uses the 3-entry [3,2,1] tier" do
-      # Field size counts entries (boats/teams), not anglers: 3 teams lands in
-      # the 1-9 band even though 10 people fished.
+    test "team mode: 3 teams with 10 anglers clears the entry minimum and pays the 10-angler [6,4,2] tier" do
+      # The 3-entry minimum counts boats/teams; the ladder band counts the
+      # people who fished. 3 teams clears the cutoff, 10 anglers sets the tier.
       tournament = create(
         :tournament, club: @club, mode: :team, awards_season_points: true,
         starts_at: 2.days.ago, ends_at: 1.day.ago
@@ -179,10 +179,10 @@ module Tournaments
       end
 
       result = SeasonPointsAwarded.call(tournament: tournament)
-      assert_equal 3.5, result[teams[0][0].id]   # 3 placement + 0.5 attendance
-      assert_equal 2.5, result[teams[1][0].id]
-      assert_equal 1.5, result[teams[2][0].id]
-      assert_equal 3.5, result[teams[0][3].id]   # every teammate gets the same as the skipper
+      assert_equal 6.5, result[teams[0][0].id]   # 6 placement + 0.5 attendance
+      assert_equal 4.5, result[teams[1][0].id]
+      assert_equal 2.5, result[teams[2][0].id]
+      assert_equal 6.5, result[teams[0][3].id]   # every teammate gets the same as the skipper
     end
 
     test "full_field pays every scoring entry, ladder sized by the entries that fished" do

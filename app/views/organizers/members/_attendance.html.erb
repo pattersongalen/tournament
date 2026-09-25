@@ -1,0 +1,49 @@
+<%# Locals: wide (the laptop admin page renders a table, the phone page a
+    list). One partial so the season-nil copy, the caption and the
+    data-role/data-name/data-nights row contract member_list_controller.js
+    sorts and filters on can't drift between the two pages. %>
+<% if @season_tag.nil? %>
+  <p class="text-slate-400 <%= wide ? '' : 'mt-4' %>">No season configured yet, so there are no league nights to count.</p>
+<% else %>
+  <%# Mains only (Sides don't award points), counted from kickoff rather than
+      from the end of the night — one higher than the standings page during a
+      league night. %>
+  <p class="text-sm text-slate-400 mb-4"
+     title="League-night Mains entered this season, counted from the start of the night">
+    League-night Mains fished this season (<%= @season_tag %>)
+  </p>
+
+  <div data-controller="member-list">
+    <%= render "organizers/members/attendance_controls" %>
+    <% row_data = ->(user, nights) { { role: "member", name: user.name, nights: nights, member_list_target: "row" } } %>
+    <% if wide %>
+      <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="bg-slate-700/50 border-b border-slate-700">
+              <th class="px-6 py-4 text-sm font-semibold text-slate-300">Name</th>
+              <th class="px-6 py-4 text-sm font-semibold text-slate-300 text-right">Main nights</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-700" data-member-list-target="list">
+            <% @rows.each do |user, nights| %>
+              <%= tag.tr class: "hover:bg-slate-700/30 transition-colors", data: row_data.call(user, nights) do %>
+                <td class="px-6 py-4 font-medium text-slate-100"><%= user.name %></td>
+                <td class="px-6 py-4 font-mono text-right text-slate-100"><%= nights %></td>
+              <% end %>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+    <% else %>
+      <ul class="space-y-2" data-member-list-target="list">
+        <% @rows.each do |user, nights| %>
+          <%= tag.li class: "bg-slate-800 rounded-lg px-4 py-3 flex items-center justify-between gap-3", data: row_data.call(user, nights) do %>
+            <strong><%= user.name %></strong>
+            <span class="font-mono text-lg"><%= nights %></span>
+          <% end %>
+        <% end %>
+      </ul>
+    <% end %>
+  </div>
+<% end %>

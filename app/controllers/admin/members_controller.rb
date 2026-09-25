@@ -1,17 +1,25 @@
 class Admin::MembersController < Admin::BaseController
+  include OrganizerActions::MembersRoster
   before_action :require_site_admin!, only: [:edit, :update, :destroy, :reactivate, :purge]
   before_action :require_permanent_organizer!, only: [:role]
 
   def index
-    @users = current_club.members.includes(:club_memberships).order(:deactivated_at, :name)
+    load_members_roster
     # Members with any catch FK (logged by them, or logged *for* them by a
     # teammate) can't be purged — mirror MembersController#purge's guard so the
     # Delete button only shows when the destroy! would actually succeed.
     member_ids = @users.map(&:id)
+    # One grouped count for the Tournaments column instead of a COUNT per row.
+    @entry_counts = TournamentEntryMember.joins(:tournament_entry)
+      .where(user_id: member_ids).group(:user_id).count
     @member_ids_with_catches = (
       Catch.where(user_id: member_ids).distinct.pluck(:user_id) +
       Catch.where(logged_by_user_id: member_ids).distinct.pluck(:logged_by_user_id)
     ).to_set
+  end
+
+  def attendance
+    load_attendance
   end
 
   def new
