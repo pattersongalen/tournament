@@ -5,6 +5,32 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# The web container regenerates these tracked files on every boot
+# (tailwindcss:build rewrites the CSS bundle, db:migrate rewrites schema.rb),
+# so the checkout here is always dirty. Pulling with --autostash used to
+# carry them across the pull and pop them back on top, which conflicts
+# whenever main also changed one and leaves unmerged index entries that
+# block every later pull ("Pulling is not possible because you have
+# unmerged files" -- hit 2026-08-13 and 2026-09-25). They are build
+# outputs, not edits: put them back to HEAD so the pull is clean and let
+# the container regenerate them from the new code. Restoring also clears
+# a conflict a previous failed run left on these paths.
+echo "==> Discarding container-regenerated build artifacts..."
+git restore --source=HEAD --staged --worktree app/assets/builds/tailwind.css db/schema.rb
+
+# A previous failed pull leaves its autostash entry behind. Drop each one
+# that holds nothing but those regenerated files; anything else is a hand
+# edit somebody made on this box, so it is left in place and named.
+# Highest index first: dropping renumbers the entries below it.
+for ref in $(git stash list --format=%gd | tac); do
+  if git stash show --name-only "$ref" | grep -qvE '^(app/assets/builds/tailwind\.css|db/schema\.rb)$'; then
+    echo "!!  $ref holds edits beyond build artifacts; leaving it:"
+    git stash show --name-only "$ref" | sed 's/^/      /'
+  else
+    git stash drop -q "$ref"
+  fi
+done
+
 echo "==> Pulling latest..."
 git pull --ff-only --autostash
 
