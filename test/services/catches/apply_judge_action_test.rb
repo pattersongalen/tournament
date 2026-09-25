@@ -88,11 +88,24 @@ module Catches
       tagged = Species.find_or_create_by!(name: "Tagged Walleye")
       fish = create(:catch, user: @user, species: tagged, length_inches: 19, tag_number: "A0001",
                     status: :needs_review)
-      Catches::ApplyJudgeAction.call(
+      result = Catches::ApplyJudgeAction.call(
         tournament: @t, catch: fish, judge: @judge, action: :manual_override,
         note: "mis-ID", species_id: @walleye.id, tag_number: "A0001"
       )
       assert_nil fish.reload.tag_number, "a tag only means something on a Tagged Walleye"
+      assert_equal "A0001", result[:tag_dropped], "the caller is told which tag the species change dropped"
+    end
+
+    test "an edit that keeps the tag reports no dropped tag" do
+      tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+      fish = create(:catch, user: @user, species: tagged, length_inches: 19, tag_number: "A0001",
+                    status: :needs_review)
+      result = Catches::ApplyJudgeAction.call(
+        tournament: @t, catch: fish, judge: @judge, action: :manual_override,
+        note: "length", length_inches: 20.0, tag_number: "A0001"
+      )
+      assert_equal "A0001", fish.reload.tag_number
+      assert_nil result[:tag_dropped]
     end
 
     test "a tag typed in the same submit as a species change away from Tagged Walleye is dropped too" do
@@ -102,12 +115,13 @@ module Catches
       # must key on the submitted tag as well.
       fish = create(:catch, user: @user, species: @walleye, length_inches: 19, tag_number: nil,
                     status: :needs_review)
-      Catches::ApplyJudgeAction.call(
+      result = Catches::ApplyJudgeAction.call(
         tournament: @t, catch: fish, judge: @judge, action: :manual_override,
         note: "typo", species_id: @pike.id, tag_number: "A123"
       )
       assert_equal @pike, fish.reload.species
       assert_nil fish.tag_number, "a species that isn't Tagged Walleye never keeps a submitted tag"
+      assert_equal "A123", result[:tag_dropped], "a tag typed and then orphaned is reported as dropped too"
     end
 
     test "a retiring action on a fish that isn't a Tagged Walleye skips the draw-void reads" do
@@ -1165,7 +1179,7 @@ module Catches
       result = ApplyJudgeAction.call(tournament: nil, catch: fish, judge: @judge, action: :manual_override,
                                      tag_number: "A0042", note: "tag added", club: @club)
       assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
-      assert_not result[:ticket_withheld]
+      assert_empty result[:tickets_withheld_in]
     end
 
     test "manual_override tag_number does not mint a ticket into a tagged tournament already drawn" do
@@ -1194,7 +1208,7 @@ module Catches
       assert_equal 0, CatchPlacement.where(tournament: t, catch: stranded).count,
                    "the draw pool is closed once the winner is drawn"
       assert ticket.reload.active
-      assert result[:ticket_withheld], "the caller is told the tag saved without a ticket"
+      assert_equal [t.name], result[:tickets_withheld_in], "the caller is told where the tag saved without a ticket"
     end
 
     test "correct_location after the draw re-issues the winner's ticket instead of dropping it" do
@@ -1247,7 +1261,9 @@ module Catches
       reissued = CatchPlacement.find_by(tournament: t, catch: fish, active: true)
       assert reissued, "a fish the first draw drew from is back in the pool once its DQ is undone"
       assert reissued.in_draw_pool
-      assert_not result[:ticket_withheld]
+      assert_empty result[:tickets_withheld_in]
+      assert result[:ticket_reissued],
+             "the re-draw ran without this fish, so the organizer must hear that it is back on the leaderboard"
       assert_equal 2, t.reload.draw_pool.count, "the organizer can re-draw over both fish"
     end
 
@@ -1317,12 +1333,13 @@ module Catches
 
       ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :disqualify, note: "oops")
       assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count
-      ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :reinstate, note: "my mistake")
+      result = ApplyJudgeAction.call(tournament: t, catch: fish, judge: @judge, action: :reinstate, note: "my mistake")
 
       assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
       assert_equal CatchPlacement.find_by!(tournament: t, catch: fish, active: true).id,
                    t.reload.drawn_winning_placement_id,
                    "the recorded winner follows the reinstated fish onto its re-issued ticket"
+      assert_not result[:ticket_reissued], "the winner followed its ticket: nothing to check"
     end
 
     test "reinstate after the draw does not mint a ticket for a fish DQ'd before it" do
@@ -1589,7 +1606,7 @@ module Catches
 
       assert_equal tagged, plain.reload.species
       assert_equal 0, CatchPlacement.where(tournament: t, catch: plain).count
-      assert result[:ticket_withheld], "the species path withholds a ticket the same way the tag path does"
+      assert_equal [t.name], result[:tickets_withheld_in], "the species path withholds a ticket the same way the tag path does"
     end
 
     test "reinstate after the draw of a fish DQ'd before it reports the withheld ticket" do
@@ -1613,7 +1630,7 @@ module Catches
 
       assert_not pulled.reload.disqualified?
       assert_equal 0, CatchPlacement.where(tournament: t, catch: pulled, active: true).count
-      assert result[:ticket_withheld], "the draw never saw this fish; the caller must hear it earned no ticket"
+      assert_equal [t.name], result[:tickets_withheld_in], "the draw never saw this fish; the caller must hear it earned no ticket"
     end
 
     test "manual_override tag add on a disqualified catch is not reported as withheld by the draw" do
@@ -1636,7 +1653,7 @@ module Catches
                                      tag_number: "A0042", note: "tag from photo", club: @club)
 
       assert_equal "A0042", dq.reload.tag_number
-      assert_not result[:ticket_withheld], "a DQ'd catch earns no ticket regardless of the draw"
+      assert_empty result[:tickets_withheld_in], "a DQ'd catch earns no ticket regardless of the draw"
     end
 
     # A drawn tagged tournament with the winner and one other ticket; the
@@ -1669,7 +1686,7 @@ module Catches
 
       assert t.reload.drawn_winner_voided?
       assert result[:draw_voided], "the judge must hear the draw is void, not a bare redirect"
-      assert_not result[:ticket_withheld]
+      assert_empty result[:tickets_withheld_in]
 
       result = ApplyJudgeAction.call(tournament: t, catch: other, judge: @judge, action: :disqualify, note: "dq")
       assert_not result[:draw_voided], "retiring a losing ticket voids nothing"
@@ -1684,7 +1701,7 @@ module Catches
       assert_equal @walleye, winner.reload.species
       assert t.reload.drawn_winner_voided?
       assert result[:draw_voided]
-      assert_not result[:ticket_withheld], "PlaceInSlots never reached the tagged branch, so nothing was withheld"
+      assert_empty result[:tickets_withheld_in], "PlaceInSlots never reached the tagged branch, so nothing was withheld"
     end
 
     test "an action on the already-voided winner that retires nothing reports no void" do
@@ -1709,7 +1726,7 @@ module Catches
 
       assert_not t.reload.drawn_winner_voided?, "the pool ticket is re-issued and the winner repointed"
       assert_not result[:draw_voided]
-      assert_not result[:ticket_withheld]
+      assert_empty result[:tickets_withheld_in]
     end
   end
 end

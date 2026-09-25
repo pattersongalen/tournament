@@ -21,7 +21,9 @@
     <div class="bg-rose-900/30 border border-rose-700/40 rounded-lg p-4 mb-4">
       <p class="text-sm text-rose-200 uppercase tracking-wide">Draw void</p>
       <p class="text-rose-100 mt-1">
-        The drawn fish (<%= winner_catch.user.name %>, tag <%= winner_catch.tag_number %>)
+        <%# last_known_tag_number: a species change away from Tagged Walleye is
+            one way the ticket goes, and it drops the tag with it. %>
+        The drawn fish (<%= winner_catch.user.name %>, tag <%= winner_catch.last_known_tag_number %>)
         no longer holds a ticket.
         <% if tickets_remain %>
           An organizer needs to re-draw.

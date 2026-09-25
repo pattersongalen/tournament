@@ -13,6 +13,12 @@
   <%= label_tag :tag_number, "Science tag # (Tagged Walleye)", class: label_class %>
   <%= text_field_tag :tag_number, catch_record.tag_number, maxlength: 16, autocomplete: "off",
                      autocapitalize: "characters", spellcheck: false,
-                     data: { "tag-field-target": "input" },
+                     data: { "tag-field-target": "input", action: "input->tag-field#retype" },
                      class: input_class %>
+  <%# Shown by the controller when the select has left Tagged Walleye with a
+      tag still in the field: the server drops it on save, and the field
+      staying populated would otherwise read as the tag being kept. %>
+  <p data-tag-field-target="hint" class="hidden mt-1 text-xs text-amber-300">
+    Only a Tagged Walleye carries a tag: saving with this species drops it.
+  </p>
 </div>

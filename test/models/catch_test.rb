@@ -28,6 +28,17 @@ class CatchTest < ActiveSupport::TestCase
     assert_equal ["imported_photo"], catch_record.reload.flags, "a repeat add must not duplicate the flag"
   end
 
+  test "remove_flag! drops the flag, mirrors the row, and is a no-op when absent" do
+    catch_record = create(:catch, user: @user, species: @walleye)
+    catch_record.add_flag!("no_draw_ticket")
+    Catch.where(id: catch_record.id).update_all("flags = flags || ARRAY['possible_duplicate']::text[]")
+    assert_equal 1, catch_record.remove_flag!("no_draw_ticket")
+    assert_equal ["possible_duplicate"], catch_record.flags, "the instance reflects the row, not its stale snapshot"
+    assert_not catch_record.changed?
+    assert_equal ["possible_duplicate"], catch_record.reload.flags
+    assert_equal 0, catch_record.remove_flag!("no_draw_ticket"), "removing an absent flag touches nothing"
+  end
+
   test "add_flag! does not clobber a flag added concurrently after the instance was loaded" do
     catch_record = create(:catch, user: @user, species: @walleye)
     # Simulate a second writer (e.g. a teammate's FlagDuplicates) appending a

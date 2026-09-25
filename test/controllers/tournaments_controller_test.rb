@@ -808,6 +808,9 @@ class TournamentsControllerTest < ActionDispatch::IntegrationTest
     get tournament_path(t)
     assert_response :success
     assert_select "#leaderboard", text: /no longer holds a ticket/
+    # The species change dropped the tag from the catch; the banner still
+    # names the tag that was drawn, read back from the audit log.
+    assert_select "#leaderboard", text: /Tagged Angler, tag A0001\)/
     assert_select "#leaderboard", text: /Winner\s+Tagged Angler/, count: 0
     # The angler still holds A0002, so their row renders — without the winner
     # highlight a void banner would contradict.

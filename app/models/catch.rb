@@ -82,6 +82,37 @@ class Catch < ApplicationRecord
     row ? 1 : 0
   end
 
+  # The inverse of add_flag!: one guarded UPDATE against the row's current
+  # flags, mirrored back from RETURNING the same way, so a flag another
+  # writer appended meanwhile survives and the instance reports what the row
+  # now holds. Status is never touched: a flag that has stopped being true
+  # (no_draw_ticket once a ticket is minted) says nothing about review.
+  # Returns the number of rows changed (0 or 1).
+  def remove_flag!(flag)
+    sql = self.class.sanitize_sql_array([
+      "UPDATE #{self.class.quoted_table_name} SET flags = array_remove(flags, ?::text) " \
+      "WHERE id = ? AND flags @> ARRAY[?]::text[] RETURNING flags",
+      flag, id, flag
+    ])
+    row = self.class.connection.exec_query(sql, "#{self.class.name} remove_flag!").cast_values.first
+    write_attribute(:flags, row ? row : Array(flags) - [flag])
+    clear_attribute_changes(%i[flags])
+    row ? 1 : 0
+  end
+
+  # The tag this fish carries, or carried: a species change away from Tagged
+  # Walleye drops the tag (Catches::ApplyJudgeAction), and the draw views
+  # still need to name the fish the winner was drawn from. The audit log
+  # snapshots the tag before every judge action, so the most recent
+  # snapshot that held one is the last tag the fish wore. One query, and
+  # only once the tag is gone.
+  def last_known_tag_number
+    tag_number.presence ||
+      judge_actions.where("COALESCE(before_state->>'tag_number', '') <> ''")
+                   .order(created_at: :desc, id: :desc)
+                   .pick(Arel.sql("before_state->>'tag_number'"))
+  end
+
   enum :status, {
     pending_sync: 0,
     synced:       1,

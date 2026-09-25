@@ -967,6 +967,37 @@ module Catches
                  "the run's own tournament object mirrors the repoint: the post-commit broadcast renders from it"
     assert_equal reissued, placed_into.drawn_winning_placement
     assert_not placed_into.changed?, "the mirror is a read-through of the SQL write, not a pending change"
+    assert_empty result[:reissued], "the winner followed its ticket: nothing for the organizer to check"
+  end
+
+  test "tagged: a pool ticket re-issued for a fish that is not the recorded winner is reported" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    winner = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                    tag_number: "A0001", captured_at_device: 2.hours.ago)
+    other = create(:catch, user: user, species: tagged, length_inches: 17.0,
+                   tag_number: "A0002", captured_at_device: 100.minutes.ago)
+    PlaceInSlots.call(catch: winner)
+    PlaceInSlots.call(catch: other)
+    CatchPlacement.where(tournament: t).update_all(in_draw_pool: true)
+    t.update_columns(drawn_winning_placement_id: CatchPlacement.find_by!(tournament: t, catch: winner).id,
+                     drawn_at: Time.current)
+
+    # The stamp says "a draw drew from this fish", not "the standing draw did":
+    # the recorded winner can't tell the organizer whether this fish was in it.
+    CatchPlacement.where(tournament: t, catch: other).deactivate_all
+    result = PlaceInSlots.call(catch: other)
+
+    assert CatchPlacement.exists?(tournament: t, catch: other, active: true)
+    assert_equal [t], result[:reissued], "a re-issue the winner did not follow is the organizer's to check"
+    assert_empty result[:withheld]
   end
 
   test "tagged: one run re-issuing across two drawn tournaments repoints both winners" do
@@ -1115,7 +1146,7 @@ module Catches
     assert_equal 0, CatchPlacement.where(tournament: t, catch: fish, active: true).count,
                  "a fish that was out of the pool when the winner was drawn must not get a ticket now"
     assert_empty result[:affected_tournaments]
-    assert_equal [t.id], result[:withheld]
+    assert_equal [t], result[:withheld]
     # The member's own submission path reads nothing off the result, so the
     # catch itself must say it earned no ticket: a member-visible flag.
     assert_includes fish.reload.flags, "no_draw_ticket"
@@ -1123,6 +1154,55 @@ module Catches
 
     PlaceInSlots.call(catch: fish)
     assert_equal 1, fish.reload.flags.count("no_draw_ticket"), "add_flag! is idempotent across re-runs"
+  end
+
+  test "tagged: withheld in one drawn tournament but ticketed in another is not flagged as ticketless" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    drawn, open = %w[Main Side].map do |name|
+      t = build(:tournament, club: club, name: name, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: user)
+      t
+    end
+    drawn.update_columns(drawn_at: 30.minutes.ago)
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+
+    result = PlaceInSlots.call(catch: fish)
+
+    assert_equal 0, CatchPlacement.where(tournament: drawn, catch: fish).count
+    assert_equal 1, CatchPlacement.where(tournament: open, catch: fish, active: true).count
+    assert_equal [drawn], result[:withheld], "withheld is a fact about the drawn tournament, not the fish"
+    assert_not_includes fish.reload.flags, "no_draw_ticket",
+                        "the fish holds a ticket in the Side, so it is not a ticketless fish"
+  end
+
+  test "tagged: the no_draw_ticket flag clears once a later run mints a ticket" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    t = build(:tournament, club: club, format: :tagged, mode: :solo,
+              starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+    t.scoring_slots.build(species: tagged, slot_count: 1)
+    t.save!
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    # Flagged by an earlier run against a tournament whose draw had closed;
+    # the member is now entered late into one still open.
+    fish.add_flag!("no_draw_ticket")
+    entry = create(:tournament_entry, tournament: t)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+
+    PlaceInSlots.call(catch: fish)
+
+    assert_equal 1, CatchPlacement.where(tournament: t, catch: fish, active: true).count
+    assert_not_includes fish.flags, "no_draw_ticket", "the instance mirrors the cleared flag"
+    assert_not_includes fish.reload.flags, "no_draw_ticket", "a fish holding a ticket is not ticketless"
   end
 
   test "tagged: new catch after a placement is deactivated does not collide on slot_index" do

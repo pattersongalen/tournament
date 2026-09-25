@@ -31,13 +31,18 @@ module Catches
 
     def call
       created, bumped = [], []
-      # Tournament ids where only a closed draw pool kept this catch from a
-      # ticket. ApplyJudgeAction turns it into the "no ticket was issued"
-      # notice; nothing else reads it.
+      # Tournaments where only a closed draw pool kept this catch from a
+      # ticket. ApplyJudgeAction and the web form turn it into the "no ticket
+      # was issued in X" notice; nothing else reads it. Per tournament, not
+      # per catch: a fish can reach a drawn Main and a still-open Side at once.
       withheld = []
       # [tournament, ticket] pairs whose re-issued pool ticket may be the drawn
       # winner's; repointed after the entry loop, in tournament-id order.
       repoints = []
+      # Tournaments where a pool ticket was re-issued but the recorded winner
+      # did not follow it: the fish is back on the leaderboard, and whether the
+      # standing draw included it is the organizer's to check (see below).
+      reissued = []
       affected_tournaments = Set.new
       # Bingo only: the entry whose card this catch changes, keyed by tournament id,
       # so we rebroadcast just that angler's card rather than everyone's.
@@ -49,7 +54,7 @@ module Catches
       # placements at the same slot_index, corrupting the leaderboard.
       ActiveRecord::Base.transaction do
         @catch.lock!  # serialize with ApplyJudgeAction on the same catch
-        return { created: [], bumped: [], withheld: [], affected_tournaments: [], submitter: @catch.user } if @catch.disqualified?
+        return { created: [], bumped: [], withheld: [], reissued: [], affected_tournaments: [], submitter: @catch.user } if @catch.disqualified?
 
         # Tournament ids where this catch already holds an active placement.
         # A concurrent duplicate POST's dedup-reconcile can race the original
@@ -189,15 +194,7 @@ module Catches
               .pick(Arel.sql("drawn_at IS NOT NULL"),
                     CatchPlacement.where(catch_id: @catch.id, tournament_id: tournament.id, in_draw_pool: true).arel.exists)
             if drawn && !in_pool
-              withheld << tournament.id
-              # The member's own submission path (the API sync, the web form)
-              # reads nothing off the result, so the catch itself says it
-              # earned no ticket: a member-visible flag on the catch list and
-              # detail page, so a fish that synced after the draw isn't a
-              # tagged catch that silently never reached the leaderboard.
-              # Informational: no bump to review. Guarded UPDATE, so a re-run
-              # (a judge re-placement, the API's dedup retry) adds it once.
-              @catch.add_flag!("no_draw_ticket")
+              withheld << tournament
               next
             end
             next_index = active_placements.empty? ? 0 : active_placements.map(&:slot_index).max + 1
@@ -477,7 +474,41 @@ module Catches
         # order gives all runs one lock order: entries first, then tournament
         # rows ascending — the same entries-then-tournament order
         # DrawTaggedWinner uses.
-        repoints.sort_by { |t, _| t.id }.each { |t, ticket| t.repoint_drawn_winner!(ticket) }
+        repoints.sort_by { |t, _| t.id }.each do |t, ticket|
+          # The stamp means "a draw drew from this fish", not "the standing
+          # draw did" (Tournaments::DrawTaggedWinner): a fish DQ'd after the
+          # first draw, left out of a forced re-draw, and then reinstated is
+          # re-issued a ticket and listed under a winner drawn without it.
+          # The repoint tells the two apart only for the winner's own fish;
+          # any other re-issue is reported so the organizer hears the fish is
+          # back on the leaderboard rather than reading a bare success.
+          reissued << t if t.repoint_drawn_winner!(ticket).zero?
+        end
+
+        # The member's own submission path (the API sync, the web form) reads
+        # nothing off the result, so the catch itself says it earned no
+        # ticket: a member-visible flag on the catch list and detail page, so
+        # a fish that synced after the draw isn't a tagged catch that silently
+        # never reached the leaderboard. A fact about the fish, not about one
+        # tournament: withheld in a drawn Main but ticketed in the still-open
+        # Side, it holds a ticket and is not flagged; ticketed later (entered
+        # late into another tagged tournament), the flag comes off. Both
+        # writes are guarded UPDATEs, so a re-run (a judge re-placement, the
+        # API's dedup retry) is a no-op. Informational: no bump to review.
+        # Reads the flag off the instance, which lock! reloaded above, so the
+        # common tagged run (a ticket, no flag, nothing withheld) issues no
+        # extra statement.
+        ticketed_now = created.any? { |p| p.tournament.format_tagged? }
+        flagged      = @catch.flags.include?("no_draw_ticket")
+        if withheld.any? || (ticketed_now && flagged)
+          holds_ticket = ticketed_now ||
+            CatchPlacement.active.where(catch_id: @catch.id, tournament_id: ::Tournament.format_tagged.select(:id)).exists?
+          if holds_ticket
+            @catch.remove_flag!("no_draw_ticket") if flagged
+          else
+            @catch.add_flag!("no_draw_ticket") unless flagged
+          end
+        end
 
         # Stamped inside the transaction so it commits atomically with the
         # placements above — that is the whole point of it existing alongside
@@ -495,7 +526,7 @@ module Catches
       # leak pre-commit state to other DB connections) and will issue its own
       # broadcast after its outer transaction commits. We skip both the leaderboard
       # rebroadcast and the notification dispatch in that case.
-      result = { created: created, bumped: bumped, withheld: withheld,
+      result = { created: created, bumped: bumped, withheld: withheld, reissued: reissued,
                  affected_tournaments: affected_tournaments.to_a, submitter: @catch.user }
 
       if @broadcast

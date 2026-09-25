@@ -32,8 +32,10 @@ module Catches
       @club = club
       @snapshot_old_attachment_id = nil
       @notify_owner = false
-      @ticket_withheld = false
+      @tickets_withheld_in = []
+      @ticket_reissued = false
       @draw_voided = false
+      @tag_dropped = nil
     end
 
     def call
@@ -96,6 +98,9 @@ module Catches
           # then orphaned by a species switch must not land either.
           if species_changed && (prior_tag || new_tag) && !::Species.find(@species_id).tagged_walleye?
             attrs[:tag_number] = nil
+            # Reported back: the editor shows the field populated right up to
+            # the submit, so the flash must say the tag went, and which one.
+            @tag_dropped = new_tag || prior_tag
           end
           if attrs.any?
             @catch.update!(attrs)
@@ -275,13 +280,22 @@ module Catches
         )
       end
 
-      # ticket_withheld: a re-placement reached a tagged tournament whose draw
-      # had already run, so the catch's tag saved but no ticket was issued (a
-      # tag added to a stranded Tagged Walleye, a species change to one, or a
-      # fish DQ'd before the draw and reinstated after it).
+      # tickets_withheld_in: the names of the tagged tournaments a re-placement
+      # reached after their draw had run, so the catch's tag saved but no
+      # ticket was issued there (a tag added to a stranded Tagged Walleye, a
+      # species change to one, or a fish DQ'd before the draw and reinstated
+      # after it). Named per tournament: the same fish can hold a ticket in
+      # a still-open Side.
+      # ticket_reissued: a re-placement re-issued a ticket the draw drew from,
+      # and the recorded winner did not follow it. Whether the standing draw
+      # included the fish (or ran without it, after a DQ and a re-draw) is
+      # not recorded, so the organizer is told to check.
       # draw_voided: this catch was the drawn winner and no longer holds a
-      # ticket. CatchUpdateNotice turns both into the flash.
-      { ticket_withheld: @ticket_withheld, draw_voided: @draw_voided }
+      # ticket.
+      # tag_dropped: the tag a species change away from Tagged Walleye removed.
+      # CatchUpdateNotice turns all four into the flash.
+      { tickets_withheld_in: @tickets_withheld_in, ticket_reissued: @ticket_reissued,
+        draw_voided: @draw_voided, tag_dropped: @tag_dropped }
     end
 
     private
@@ -433,15 +447,17 @@ module Catches
     # already narrowed to the editing club by reachable_rows, so club: is
     # not passed again — one filter, in one place, decides the scope both the
     # entry locks and the placement run see. PlaceInSlots reports the
-    # tournaments where the draw alone kept it from minting a ticket (a
-    # ticket the draw drew from is re-issued, and the recorded winner
-    # repointed, by PlaceInSlots itself). The catch still saves, so the
-    # signal is kept for the caller: the organizer otherwise sees "Catch
-    # updated." and assumes a ticket. Any other reason for no ticket (a DQ'd
-    # catch, no scoring slot) is not the draw's doing and is not reported.
+    # tournaments where the draw alone kept it from minting a ticket, and
+    # those where it re-issued a ticket the draw drew from without the
+    # recorded winner following it. The catch still saves, so both signals
+    # are kept for the caller: the organizer otherwise sees "Catch updated."
+    # and assumes a ticket, or a leaderboard the standing draw covers. Any
+    # other reason for no ticket (a DQ'd catch, no scoring slot) is not the
+    # draw's doing and is not reported.
     def place!(rows:, **opts)
       placed = ::Catches::PlaceInSlots.call(catch: @catch, broadcast: false, rows: rows, **opts)
-      @ticket_withheld ||= placed[:withheld].any?
+      @tickets_withheld_in |= placed[:withheld].map(&:name)
+      @ticket_reissued ||= placed[:reissued].any?
       placed
     end
 
