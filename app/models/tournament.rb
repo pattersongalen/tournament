@@ -116,9 +116,20 @@ class Tournament < ApplicationRecord
   # PlaceInSlots holds; DrawTaggedWinner takes both for update, so it can't
   # race a draw.
   def repoint_drawn_winner!(ticket)
-    Tournament.where(id: id)
-              .where(drawn_winning_placement_id: CatchPlacement.where(catch_id: ticket.catch_id).select(:id))
-              .update_all(drawn_winning_placement_id: ticket.id)
+    updated = Tournament.where(id: id)
+                        .where(drawn_winning_placement_id: CatchPlacement.where(catch_id: ticket.catch_id).select(:id))
+                        .update_all(drawn_winning_placement_id: ticket.id)
+    # Mirror the SQL write on this object, as Catch#add_flag! does: PlaceInSlots
+    # broadcasts the tagged leaderboard from the tournament it placed into once
+    # its transaction commits, and that partial highlights the winner row by
+    # drawn_winning_placement. Left stale, the broadcast would still name the
+    # boat the retired ticket sat on.
+    if updated.positive?
+      write_attribute(:drawn_winning_placement_id, ticket.id)
+      clear_attribute_changes(%i[drawn_winning_placement_id])
+      association(:drawn_winning_placement).reset
+    end
+    updated
   end
 
   # Other tournaments sharing this one's link group. Club-scoped as well as

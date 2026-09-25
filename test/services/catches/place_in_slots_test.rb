@@ -962,6 +962,50 @@ module Catches
     assert_equal reissued.id, t.reload.drawn_winning_placement_id,
                  "the recorded winner follows the re-issued row wherever the re-placement came from"
     assert_equal [t], result[:affected_tournaments]
+    placed_into = result[:affected_tournaments].first
+    assert_equal reissued.id, placed_into.drawn_winning_placement_id,
+                 "the run's own tournament object mirrors the repoint: the post-commit broadcast renders from it"
+    assert_equal reissued, placed_into.drawn_winning_placement
+    assert_not placed_into.changed?, "the mirror is a read-through of the SQL write, not a pending change"
+  end
+
+  test "tagged: one run re-issuing across two drawn tournaments repoints both winners" do
+    club = create(:club)
+    user = create(:user, club: club)
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    tournaments = 2.times.map do
+      t = build(:tournament, club: club, format: :tagged, mode: :solo,
+                starts_at: 3.hours.ago, ends_at: 1.hour.ago)
+      t.scoring_slots.build(species: tagged, slot_count: 1)
+      t.save!
+      t
+    end
+    # Entries created in the opposite order to the tournaments, so the
+    # entry-id iteration order PlaceInSlots uses differs from tournament-id
+    # order: the repoint must land on both regardless of which came first.
+    tournaments.reverse.each do |t|
+      entry = create(:tournament_entry, tournament: t)
+      create(:tournament_entry_member, tournament_entry: entry, user: user)
+    end
+    fish = create(:catch, user: user, species: tagged, length_inches: 18.0,
+                  tag_number: "A0001", captured_at_device: 2.hours.ago)
+    PlaceInSlots.call(catch: fish)
+    tournaments.each do |t|
+      ticket = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+      t.update_columns(drawn_winning_placement_id: ticket.id, drawn_at: Time.current)
+      ticket.update_columns(in_draw_pool: true, active: false)
+    end
+
+    result = PlaceInSlots.call(catch: fish)
+
+    assert_equal tournaments.map(&:id).sort, result[:affected_tournaments].map(&:id).sort
+    tournaments.each do |t|
+      reissued = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
+      assert reissued.in_draw_pool
+      assert_equal reissued.id, t.reload.drawn_winning_placement_id,
+                   "tournament #{t.id}'s winner follows its own re-issued ticket"
+      assert_not t.drawn_winner_voided?
+    end
   end
 
   test "tagged: the draw state is read from the DB under the lock, not from the handed-in row" do

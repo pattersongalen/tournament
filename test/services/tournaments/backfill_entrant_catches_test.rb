@@ -72,7 +72,19 @@ module Tournaments
       new_entry = create(:tournament_entry, tournament: t)
       create(:tournament_entry_member, tournament_entry: new_entry, user: @late_user)
 
-      BackfillEntrantCatches.call(tournament: t, users: [@late_user])
+      # Snapshot at broadcast time: the object handed over may be `t` itself,
+      # which the assertions below reload.
+      broadcast_winner_ids = []
+      original = Placements::BroadcastLeaderboard.method(:call)
+      Placements::BroadcastLeaderboard.define_singleton_method(:call) do |**kwargs|
+        broadcast_winner_ids << kwargs[:tournament].drawn_winning_placement_id
+        original.call(**kwargs)
+      end
+      begin
+        BackfillEntrantCatches.call(tournament: t, users: [@late_user])
+      ensure
+        Placements::BroadcastLeaderboard.define_singleton_method(:call, original)
+      end
 
       reissued = CatchPlacement.find_by!(tournament: t, catch: fish, active: true)
       assert_equal new_entry.id, reissued.tournament_entry_id
@@ -80,6 +92,9 @@ module Tournaments
       assert_equal reissued.id, t.reload.drawn_winning_placement_id,
                    "the recorded winner must follow the live ticket, not stay on the boat the member left"
       assert_not t.drawn_winner_voided?
+      assert_equal [reissued.id], broadcast_winner_ids,
+                   "the post-commit broadcast must render the winner row from the repointed ticket, " \
+                   "not from the object loaded before the sweep"
     end
 
     test "second run is a no-op" do

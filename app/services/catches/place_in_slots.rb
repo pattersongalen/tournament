@@ -35,6 +35,9 @@ module Catches
       # ticket. ApplyJudgeAction turns it into the "no ticket was issued"
       # notice; nothing else reads it.
       withheld = []
+      # [tournament, ticket] pairs whose re-issued pool ticket may be the drawn
+      # winner's; repointed after the entry loop, in tournament-id order.
+      repoints = []
       affected_tournaments = Set.new
       # Bingo only: the entry whose card this catch changes, keyed by tournament id,
       # so we rebroadcast just that angler's card rather than everyone's.
@@ -177,7 +180,7 @@ module Catches
             # with FOR UPDATE: it does not conflict with itself, so two runs
             # placing across the same pair of tagged tournaments in opposite
             # entry order can't deadlock on the rows, and it does not conflict
-            # with the plain UPDATE repoint_drawn_winner! runs below.
+            # with the plain UPDATE repoint_drawn_winner! runs after the loop.
             # Locked after the entry, the order every writer uses.
             #
             # One query: whether the pool is closed, and whether this fish
@@ -206,10 +209,11 @@ module Catches
             created << ticket
             # A re-issued pool ticket may be the drawn winner's: the retired
             # row was in the draw, and the recorded winner must follow the
-            # live row. Done here, where in_pool is already known, because
+            # live row. Recorded here, where in_pool is already known, because
             # every re-issue passes through this branch: the judge flows and
-            # the late-entrant backfill after a member drop alike.
-            tournament.repoint_drawn_winner!(ticket) if in_pool
+            # the late-entrant backfill after a member drop alike. The write
+            # itself waits until the loop is done (see below).
+            repoints << [tournament, ticket] if in_pool
             affected_tournaments << tournament
           elsif tournament.format_biggest_vs_smallest?
             # Biggest vs Smallest: keep at most 2 placements per (entry, species) — the
@@ -462,6 +466,18 @@ module Catches
             end
           end
         end
+
+        # The repoint is a plain UPDATE, which holds the tournament row FOR NO
+        # KEY UPDATE until commit. Issued inside the loop it would take those
+        # row locks in this run's entry order, and two runs re-issuing tickets
+        # across the same pair of drawn tagged tournaments (two judges
+        # correcting two fish at once, each fish on a different entry in each
+        # tournament) could take them in opposite order and deadlock. Every
+        # entry is locked by now, so issuing the writes here in tournament-id
+        # order gives all runs one lock order: entries first, then tournament
+        # rows ascending — the same entries-then-tournament order
+        # DrawTaggedWinner uses.
+        repoints.sort_by { |t, _| t.id }.each { |t, ticket| t.repoint_drawn_winner!(ticket) }
 
         # Stamped inside the transaction so it commits atomically with the
         # placements above — that is the whole point of it existing alongside
