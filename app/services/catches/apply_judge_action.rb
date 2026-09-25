@@ -45,7 +45,10 @@ module Catches
       ActiveRecord::Base.transaction do
         @catch.lock!  # serialize with PlaceInSlots on the same catch
         before = snapshot
-        voided_before = can_retire_ticket? && draw_voided_by_this_catch?
+        # Read once, before the change: a species correction reloads the
+        # association, and the after-read must see the fish as it went in.
+        can_void = can_void_draw?
+        voided_before = can_void && draw_voided_by_this_catch?
         case @action
         when :approve, :dock_verify
           @catch.update!(status: :synced)
@@ -87,10 +90,11 @@ module Catches
           attrs[:tag_number] = new_tag if tag_changed
           # A tag only means something on a Tagged Walleye. The editor leaves
           # the field populated across a species change (it stays visible so an
-          # organizer can see what's there), so a change away from Tagged
-          # Walleye drops the tag itself rather than leaving a plain Walleye
-          # wearing one for good.
-          if species_changed && prior_tag && !::Species.find(@species_id).tagged_walleye?
+          # organizer can see what's there), so a change to any other species
+          # drops the tag itself rather than leaving a plain Walleye wearing one
+          # for good. Stored OR submitted: a tag typed in this same submit and
+          # then orphaned by a species switch must not land either.
+          if species_changed && (prior_tag || new_tag) && !::Species.find(@species_id).tagged_walleye?
             attrs[:tag_number] = nil
           end
           if attrs.any?
@@ -230,8 +234,8 @@ module Catches
         # or a length fix on an already-voided winner (void before, void
         # after) reports nothing, and a reinstate that re-issues the pool
         # ticket (and repoints the winner) reports nothing either. Actions
-        # that can't retire a row skip both reads.
-        @draw_voided = can_retire_ticket? && !voided_before && draw_voided_by_this_catch?
+        # that can't retire a row, and fish that hold no ticket, skip both reads.
+        @draw_voided = can_void && !voided_before && draw_voided_by_this_catch?
 
         JudgeAction.create!(
           judge_user: @judge, catch: @catch, action: @action, note: @note,
@@ -290,6 +294,16 @@ module Catches
 
     def can_retire_ticket?
       RETIRING_ACTIONS.include?(@action)
+    end
+
+    # A tagged tournament tickets nothing but a Tagged Walleye (PlaceInSlots'
+    # tagged branch, and the format takes no forced slot), so a fish of any
+    # other species going in holds no live ticket: its draw is already void
+    # or never pointed at it, and this action can't be what voids it. The
+    # species is loaded by the before-snapshot, so the common length or note
+    # fix on a plain fish skips both EXISTS reads under the row lock for free.
+    def can_void_draw?
+      can_retire_ticket? && @catch.species&.tagged_walleye? == true
     end
 
     # Voided only for a tournament whose recorded winner is one of THIS

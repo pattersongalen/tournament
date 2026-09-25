@@ -41,8 +41,8 @@
             <div class="text-slate-500"><%= c.captured_at_device.strftime("%b %d %Y · %l:%M:%S %p") %></div>
             <% if c.disqualified? %>
               <div class="text-red-400 mt-1">disqualified</div>
-            <% elsif visible_flags_for(c).any? || c.latest_approver %>
-              <div class="mt-1"><%= render "catches/flag_badges", catch_record: c %></div>
+            <% elsif (visible_flags = visible_flags_for(c)).any? || c.latest_approver %>
+              <div class="mt-1"><%= render "catches/flag_badges", catch_record: c, visible_flags: visible_flags %></div>
             <% elsif c.needs_review? %>
               <div class="text-amber-400 mt-1">needs review</div>
             <% end %>

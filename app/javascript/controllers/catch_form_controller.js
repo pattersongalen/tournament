@@ -66,8 +66,7 @@ export default class extends Controller {
   }
 
   _isTaggedSpecies() {
-    return this.hasTaggedSpeciesIdValue
-        && isTaggedSpecies(this.speciesSelectTarget.value, this.taggedSpeciesIdValue)
+    return isTaggedSpecies(this.speciesSelectTarget.value, this.taggedSpeciesIdValue)
   }
 
   _missingFieldMessage() {

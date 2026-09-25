@@ -95,6 +95,31 @@ module Catches
       assert_nil fish.reload.tag_number, "a tag only means something on a Tagged Walleye"
     end
 
+    test "a tag typed in the same submit as a species change away from Tagged Walleye is dropped too" do
+      # The editor keeps a populated tag field visible across a species switch,
+      # so a tag entered while Tagged Walleye was selected rides along with a
+      # submit that lands on Walleye. No stored tag to start with: the rule
+      # must key on the submitted tag as well.
+      fish = create(:catch, user: @user, species: @walleye, length_inches: 19, tag_number: nil,
+                    status: :needs_review)
+      Catches::ApplyJudgeAction.call(
+        tournament: @t, catch: fish, judge: @judge, action: :manual_override,
+        note: "typo", species_id: @pike.id, tag_number: "A123"
+      )
+      assert_equal @pike, fish.reload.species
+      assert_nil fish.tag_number, "a species that isn't Tagged Walleye never keeps a submitted tag"
+    end
+
+    test "a retiring action on a fish that isn't a Tagged Walleye skips the draw-void reads" do
+      # Only a Tagged Walleye can hold a draw ticket, so a length fix on a plain
+      # fish has no draw to void and must not probe the winner pointer at all.
+      void_reads = count_queries(/drawn_winning_placement_id/) do
+        ApplyJudgeAction.call(tournament: @t, catch: @catch, judge: @judge,
+                              action: :manual_override, length_inches: 20.5, note: "re-measured")
+      end
+      assert_equal 0, void_reads, "expected no draw-void probe for a non-tagged fish, got #{void_reads}"
+    end
+
     test "snapshot reuses the loaded species across before/after instead of re-querying" do
       # The before/after snapshots should share one species read (the memoized
       # association) rather than each issuing its own Species.find_by. The lone

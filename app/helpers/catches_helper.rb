@@ -192,14 +192,16 @@ module CatchesHelper
     flags - REVIEW_ONLY_FLAGS
   end
 
-  # The visible flags that put the catch in front of a judge.
-  def review_flags_for(catch_record)
-    visible_flags_for(catch_record) - INFO_FLAGS
+  # The visible flags that put the catch in front of a judge. Both splits
+  # take the visible list when the caller already has it, so one badge cell
+  # runs the can_review_catch? walk once, not once per split.
+  def review_flags_for(catch_record, visible = visible_flags_for(catch_record))
+    visible - INFO_FLAGS
   end
 
   # The visible flags that only annotate the catch.
-  def info_flags_for(catch_record)
-    visible_flags_for(catch_record) & INFO_FLAGS
+  def info_flags_for(catch_record, visible = visible_flags_for(catch_record))
+    visible & INFO_FLAGS
   end
 
   FLAG_LABELS = {
