@@ -1,0 +1,75 @@
+<% input_classes = "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100" %>
+<% small_button = "px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium transition-colors" %>
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold">Questionnaire — <%= @foreign_club.name %></h1>
+  <p class="text-slate-400 mt-1">Questions apply to every season-points tournament in this club. When one ends, its top 3 boats are asked these. Retiring a question keeps the answers already given.</p>
+</div>
+
+<% failed = @failed_question || (@new_question if @new_question.errors.any?) %>
+<% if failed %>
+  <div id="question-errors" class="bg-red-500/20 border border-red-500/40 text-red-200 rounded-lg px-4 py-3 mb-6">
+    <ul class="list-disc list-inside">
+      <% failed.errors.full_messages.each do |message| %>
+        <li><%= message %></li>
+      <% end %>
+    </ul>
+  </div>
+<% end %>
+
+<h2 class="text-xl font-semibold text-white mb-3">Asked now</h2>
+<div id="active-questions" class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden mb-8">
+  <% if @active_questions.empty? %>
+    <p class="text-slate-400 px-6 py-4">No questions. Nobody is asked until you add or restore one.</p>
+  <% else %>
+    <ul class="divide-y divide-slate-700">
+      <% @active_questions.each_with_index do |question, index| %>
+        <li data-question="<%= question.id %>" class="px-6 py-4 flex items-center gap-3">
+          <%= form_with url: admin_club_question_path(@foreign_club, question), method: :patch,
+                        class: "flex-1 flex items-center gap-2" do %>
+            <%# The row that just failed to rename shows what was typed; every other row shows the saved wording. %>
+            <%= text_field_tag "club_question[prompt]",
+                  (@failed_question&.id == question.id ? @failed_question.prompt : question.prompt),
+                  id: "question_#{question.id}_prompt", maxlength: ClubQuestion::PROMPT_MAX,
+                  "aria-label": "Question #{index + 1}", class: input_classes %>
+            <%= submit_tag "Rename", class: small_button %>
+          <% end %>
+          <%= button_to "Up", move_admin_club_question_path(@foreign_club, question), method: :patch,
+                params: { direction: "up" }, disabled: index.zero?, class: "#{small_button} disabled:opacity-40" %>
+          <%= button_to "Down", move_admin_club_question_path(@foreign_club, question), method: :patch,
+                params: { direction: "down" }, disabled: index == @active_questions.size - 1,
+                class: "#{small_button} disabled:opacity-40" %>
+          <%= button_to "Retire", retire_admin_club_question_path(@foreign_club, question), method: :patch,
+                class: small_button %>
+        </li>
+      <% end %>
+    </ul>
+  <% end %>
+</div>
+
+<h2 class="text-xl font-semibold text-white mb-3">Add a question</h2>
+<%= form_with url: admin_club_questions_path(@foreign_club), method: :post, class: "flex items-center gap-2 mb-8" do %>
+  <%= text_field_tag "club_question[prompt]", @new_question.prompt,
+        id: "new_question_prompt", maxlength: ClubQuestion::PROMPT_MAX,
+        placeholder: "For example: Water temperature", "aria-label": "New question", class: input_classes %>
+  <%= submit_tag "Add", class: "h-11 px-5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium" %>
+<% end %>
+
+<% if @retired_questions.any? %>
+  <h2 class="text-xl font-semibold text-white mb-3">Retired</h2>
+  <div id="retired-questions" class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden mb-8">
+    <ul class="divide-y divide-slate-700">
+      <% @retired_questions.each do |question| %>
+        <li class="px-6 py-4 flex items-center justify-between gap-3">
+          <span class="text-slate-300"><%= question.prompt %></span>
+          <%= button_to "Restore", restore_admin_club_question_path(@foreign_club, question), method: :patch,
+                class: small_button %>
+        </li>
+      <% end %>
+    </ul>
+  </div>
+<% end %>
+
+<p>
+  <%= link_to "← Back to #{@foreign_club.name}", admin_club_path(@foreign_club), class: "text-blue-400 hover:text-blue-300" %>
+</p>

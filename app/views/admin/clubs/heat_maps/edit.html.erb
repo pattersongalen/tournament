@@ -1,0 +1,79 @@
+<% sliders = [
+     [:heat_map_radius,      "radius",     "Radius",                 " px", "How big each catch's blob is, in screen pixels."],
+     [:heat_map_blur,        "blur",       "Blur",                   " px", "How soft the edges are."],
+     [:heat_map_max,         "max",        "Catches needed for red", "",    "How many overlapping catches reach the hottest colour."],
+     [:heat_map_min_opacity, "minOpacity", "Faintest blob",          "%",   "How visible a single catch is."]
+   ] %>
+
+<div class="mb-6">
+  <h1 class="text-3xl font-bold">Heat map — <%= @foreign_club.name %></h1>
+  <p class="text-slate-400 mt-1">A map of where the club catches fish, from the exact GPS of logged catches. Off until you turn it on.</p>
+</div>
+
+<% if @errors.present? %>
+  <div id="heat-map-errors" class="bg-red-500/20 border border-red-500/40 text-red-200 rounded-lg px-4 py-3 mb-6">
+    <ul class="list-disc list-inside">
+      <% @errors.each do |message| %>
+        <li><%= message %></li>
+      <% end %>
+    </ul>
+  </div>
+<% end %>
+
+<%= form_with model: @foreign_club, scope: :club, url: admin_club_heat_map_path(@foreign_club), method: :patch,
+              data: { controller: "heat-map-settings" } do |f| %>
+  <div class="bg-slate-800 rounded-xl border border-slate-700 p-6 mb-6">
+    <div class="flex items-start gap-3">
+      <%= f.check_box :heat_map_enabled, class: "h-5 w-5 mt-1" %>
+      <div>
+        <%= f.label :heat_map_enabled, "Members can see the club heat map", class: "font-semibold text-slate-100" %>
+        <p class="text-yellow-200 text-sm mt-1">While this is on, every member of the club can see the exact location of every catch logged by the club's members.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+    <div class="bg-slate-800 rounded-xl border border-slate-700 p-6">
+      <h2 class="text-xl font-semibold text-white mb-1">Heat size</h2>
+      <p class="text-slate-400 text-sm mb-4">Move a slider and the preview redraws. Nothing is saved until you press Save.</p>
+
+      <% sliders.each do |attribute, option, label, unit, help| %>
+        <% range = Club::HEAT_MAP_RANGES.fetch(attribute) %>
+        <div class="mb-5">
+          <div class="flex items-baseline justify-between">
+            <%= f.label attribute, label, class: "text-sm text-slate-300" %>
+            <output data-output-for="<%= option %>" class="text-sm font-semibold text-slate-100 tabular-nums"><%= @foreign_club.public_send(attribute) %><%= unit %></output>
+          </div>
+          <%= f.range_field attribute, min: range.min, max: range.max, step: 1,
+                class: "w-full accent-blue-600",
+                data: { heat_map_settings_target: "slider", action: "input->heat-map-settings#update",
+                        option: option, unit: unit, default: Club::HEAT_MAP_DEFAULTS.fetch(attribute) } %>
+          <p class="text-slate-400 text-xs"><%= help %></p>
+        </div>
+      <% end %>
+
+      <button type="button" data-action="heat-map-settings#reset"
+              class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium">Reset to defaults</button>
+    </div>
+
+    <div>
+      <h2 class="text-xl font-semibold text-white mb-1">Preview</h2>
+      <p class="text-slate-400 text-sm mb-4">This club's catches from the last 12 months, all species: <%= pluralize(@points.size, "catch") %>.</p>
+      <%# Coordinates only, as on the member page. %>
+      <div id="heat-map-preview"
+           class="relative isolate w-full aspect-[3/4] max-h-[70vh] rounded-xl overflow-hidden shadow-xl border border-slate-700 bg-slate-800"
+           data-controller="heat-map"
+           data-heat-map-settings-target="preview"
+           data-heat-map-points-value="<%= @points.to_json %>"
+           data-heat-map-options-value="<%= @foreign_club.heat_map_options.to_json %>"
+           data-heat-map-empty-value="This club has no catches with GPS yet.">
+        <div class="absolute inset-0 flex items-center justify-center text-slate-500 italic">Loading map...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex gap-3">
+    <%= f.submit "Save", class: "h-12 px-6 rounded-lg bg-blue-600 active:bg-blue-700 text-white font-semibold" %>
+    <%= link_to "Cancel", admin_club_path(@foreign_club), class: "h-12 px-6 rounded-lg bg-slate-700 text-slate-100 leading-[3rem]" %>
+  </div>
+<% end %>

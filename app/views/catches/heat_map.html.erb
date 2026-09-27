@@ -1,0 +1,75 @@
+<% input_classes = "w-full h-12 rounded-lg bg-slate-800 border border-slate-700 px-3 text-base text-slate-100" %>
+
+<div class="flex items-center justify-between mt-4 mb-4">
+  <h1 class="text-2xl font-semibold">Club heat map</h1>
+  <%= link_to "My map", map_catches_path, class: "text-blue-400 font-medium" %>
+</div>
+
+<p class="text-slate-400 text-sm mb-4">Where the club has caught fish. Brighter means more catches.</p>
+
+<%= form_with url: heat_map_catches_path, method: :get, class: "bg-slate-800 rounded-xl p-4 mb-4" do %>
+  <%= hidden_field_tag :filtered, "1", id: nil %>
+
+  <fieldset data-controller="check-all" class="mb-4">
+    <legend class="text-sm text-slate-300 mb-2">Species</legend>
+    <div class="flex flex-wrap gap-x-4 gap-y-2 mb-3">
+      <% @species.each do |species| %>
+        <label class="flex items-center gap-2 text-slate-100">
+          <%= check_box_tag "species[]", species.id, @filters.species_ids.include?(species.id),
+                id: "species_#{species.id}", class: "h-5 w-5",
+                data: { check_all_target: "box" } %>
+          <span><%= species.name %></span>
+        </label>
+      <% end %>
+    </div>
+    <div class="flex gap-2">
+      <button type="button" data-action="check-all#all"
+              class="px-3 py-1.5 rounded bg-slate-700 active:bg-slate-600 text-white text-xs font-medium">Select all</button>
+      <button type="button" data-action="check-all#none"
+              class="px-3 py-1.5 rounded bg-slate-700 active:bg-slate-600 text-white text-xs font-medium">Select none</button>
+    </div>
+  </fieldset>
+
+  <div class="grid grid-cols-2 gap-3 mb-4">
+    <div>
+      <%= label_tag :min_length, "Min length (in)", class: "block text-sm text-slate-300 mb-1" %>
+      <%= number_field_tag :min_length, @filters.min_length&.then { |v| v.to_s.delete_suffix(".0") },
+            min: 0, step: 0.25, inputmode: "decimal", placeholder: "Any", class: input_classes %>
+    </div>
+    <div>
+      <%= label_tag :max_length, "Max length (in)", class: "block text-sm text-slate-300 mb-1" %>
+      <%= number_field_tag :max_length, @filters.max_length&.then { |v| v.to_s.delete_suffix(".0") },
+            min: 0, step: 0.25, inputmode: "decimal", placeholder: "Any", class: input_classes %>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 gap-3 mb-4">
+    <div>
+      <%= label_tag :from, "From", class: "block text-sm text-slate-300 mb-1" %>
+      <%= date_field_tag :from, @filters.from.iso8601, class: input_classes %>
+    </div>
+    <div>
+      <%= label_tag :to, "To", class: "block text-sm text-slate-300 mb-1" %>
+      <%= date_field_tag :to, @filters.to.iso8601, class: input_classes %>
+    </div>
+  </div>
+
+  <%= submit_tag "Update map", name: nil,
+        class: "block w-full h-12 px-6 rounded-lg bg-blue-600 active:bg-blue-700 text-white font-semibold" %>
+<% end %>
+
+<%# `isolate` keeps Leaflet's pane and control z-indexes (400 to 1000) inside
+    the map, so the blocking notice popup stays on top of it. %>
+<%# Coordinates only. Nothing else about a catch may be added to this
+    element or this page: the heat map is the one place exact locations of
+    other members' catches are shown. %>
+<div id="heat-map"
+     class="relative isolate w-full aspect-[3/4] rounded-xl overflow-hidden shadow-xl border border-slate-700 bg-slate-800"
+     data-controller="heat-map"
+     data-heat-map-points-value="<%= @points.to_json %>"
+     data-heat-map-options-value="<%= current_club.heat_map_options.to_json %>"
+     data-heat-map-empty-value="No catches match these filters.">
+  <div class="absolute inset-0 flex items-center justify-center text-slate-500 italic">Loading map...</div>
+</div>
+
+<p id="heat-map-count" class="text-slate-400 text-sm mt-2">Showing <%= pluralize(@points.size, "catch") %></p>

@@ -1,0 +1,14 @@
+<tr>
+  <td class="px-6 py-4 font-medium text-slate-100 align-top w-1/3"><%= user.name %></td>
+  <td class="px-6 py-4 text-sm text-slate-300">
+    <% if acknowledgments.empty? %>
+      <span class="text-slate-500">Not acknowledged yet</span>
+    <% else %>
+      <ul class="space-y-1">
+        <% acknowledgments.each do |ack| %>
+          <li><%= ack.acknowledged_on.strftime("%b %-d, %Y") %> <span class="text-slate-500">at <%= ack.created_at.in_time_zone.strftime("%-l:%M %p") %></span></li>
+        <% end %>
+      </ul>
+    <% end %>
+  </td>
+</tr>

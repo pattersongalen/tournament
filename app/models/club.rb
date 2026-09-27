@@ -5,6 +5,37 @@ class Club < ApplicationRecord
   has_many :boats, dependent: :destroy
   has_many :tournament_templates, dependent: :destroy
   has_many :rules_revisions, class_name: "ClubRulesRevision", dependent: :destroy
+  has_many :notices, class_name: "ClubNotice", dependent: :destroy
+  has_many :questions, class_name: "ClubQuestion", dependent: :delete_all
+
+  before_create { self.questionnaires_start_at ||= Time.current }
+  after_create :seed_default_questions
+
+  # The club heat map's display tuning, set by a site admin against a live
+  # preview. Ranges are what the admin sliders offer.
+  HEAT_MAP_RANGES = {
+    heat_map_radius: 5..60,
+    heat_map_blur: 0..40,
+    heat_map_max: 1..20,
+    heat_map_min_opacity: 0..80
+  }.freeze
+  HEAT_MAP_DEFAULTS = {
+    heat_map_radius: 25, heat_map_blur: 15, heat_map_max: 5, heat_map_min_opacity: 30
+  }.freeze
+
+  HEAT_MAP_RANGES.each do |attribute, range|
+    validates attribute, numericality: { only_integer: true, in: range }
+  end
+
+  # The options hash Leaflet.heat takes. min_opacity is stored as a percentage.
+  def heat_map_options
+    {
+      radius: heat_map_radius,
+      blur: heat_map_blur,
+      max: heat_map_max,
+      minOpacity: heat_map_min_opacity / 100.0
+    }
+  end
   enum :active_rules_season, { open_water: 0, ice: 1 }, prefix: true
   enum :banner_style, { info: 0, good: 1, alert: 2 }, default: :info
 
@@ -268,5 +299,14 @@ class Club < ApplicationRecord
     end
     return if ladder.each_cons(2).all? { |a, b| a >= b }
     errors.add(attribute, "must be listed highest first")
+  end
+
+  def seed_default_questions
+    now = Time.current
+    ClubQuestion.insert_all!(
+      ClubQuestion::DEFAULT_PROMPTS.each_with_index.map do |prompt, index|
+        { club_id: id, prompt: prompt, position: index + 1, created_at: now, updated_at: now }
+      end
+    )
   end
 end

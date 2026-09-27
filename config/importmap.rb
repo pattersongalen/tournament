@@ -6,6 +6,8 @@ pin "lib/length_convert", to: "lib/length_convert.js"
 pin "lib/tag_rule", to: "lib/tag_rule.js"
 pin "lib/leaflet_default_icons", to: "lib/leaflet_default_icons.js"
 pin "lib/leaflet_teardown", to: "lib/leaflet_teardown.js"
+pin "lib/leaflet_global", to: "lib/leaflet_global.js"
+pin "lib/leaflet_heat", to: "lib/leaflet_heat.js"
 pin "lib/ios_device", to: "lib/ios_device.js"
 pin "offline/sync", to: "offline/sync.js"
 pin "offline/session", to: "offline/session.js"
@@ -21,5 +23,6 @@ pin_all_from "app/javascript/controllers", under: "controllers"
 pin "idb" # @8.0.3
 pin "@hotwired/turbo-rails", to: "turbo.min.js"
 pin "leaflet" # @1.9.4
+pin "leaflet-heat" # @0.2.0
 pin "trix"
 pin "@rails/actiontext", to: "actiontext.esm.js"

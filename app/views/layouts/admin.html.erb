@@ -13,6 +13,7 @@
   </head>
 
   <body class="bg-slate-900 text-slate-100 min-h-screen">
+    <%= render "shared/notice_popup", club_notice: due_notice if due_notice %>
     <script>
       // Mirror the build the browser actually ran into a cookie so the server can
       // detect a stale PWA shell (a cached shell carries an old data-app-build).

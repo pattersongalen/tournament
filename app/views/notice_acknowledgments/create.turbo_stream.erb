@@ -1,0 +1,5 @@
+<% if @next_notice %>
+  <%= turbo_stream.replace "notice-popup", partial: "shared/notice_popup", locals: { club_notice: @next_notice } %>
+<% else %>
+  <%= turbo_stream.remove "notice-popup" %>
+<% end %>

@@ -1,0 +1,41 @@
+<h1 class="text-2xl font-semibold mt-4 mb-1"><%= @tournament.name %></h1>
+<p class="text-slate-400 mb-4">
+  <%= @entry.display_name %><% if @place %> · <%= @place.ordinalize %> place<% end %>
+</p>
+
+<p class="text-slate-300 mb-4">Tell the club what worked. Fill in what you like; your answers show on the tournament page for every member, and anyone on your boat can change them later.</p>
+
+<% if @error %>
+  <p id="questionnaire-error" class="bg-red-500/20 border border-red-500/40 text-red-200 rounded-lg px-3 py-2 mb-4"><%= @error %></p>
+<% end %>
+
+<%= form_with url: tournament_entry_questionnaire_path(@tournament, @entry), method: :patch do |f| %>
+  <% @questions.each do |question| %>
+    <div class="mb-4">
+      <%= label_tag "answers_#{question.id}", question.prompt, class: "block text-sm text-slate-300 mb-1" %>
+      <%= text_field_tag "answers[#{question.id}]", @typed[question.id.to_s],
+            id: "answers_#{question.id}",
+            maxlength: EntryQuestionnaireAnswer::BODY_MAX,
+            autocomplete: "off",
+            class: "w-full h-12 rounded-lg bg-slate-800 border border-slate-700 px-3 text-base text-slate-100" %>
+    </div>
+  <% end %>
+
+  <% if @retired_answers.any? %>
+    <div id="retired-answers" class="mb-4 text-sm text-slate-400">
+      <p class="mb-1">Answered earlier, to questions no longer asked:</p>
+      <ul class="space-y-1">
+        <% @retired_answers.each do |prompt, body| %>
+          <li><span class="text-slate-300"><%= prompt %>:</span> <%= body %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <%= f.submit "Save answers",
+        class: "block w-full h-14 px-6 text-lg font-semibold rounded-lg bg-blue-600 active:bg-blue-700 text-white" %>
+<% end %>
+
+<p class="mt-4 text-center">
+  <%= link_to "Back to the tournament", tournament_path(@tournament), class: "text-blue-400" %>
+</p>

@@ -112,4 +112,11 @@
   <%= render "tournaments/leaderboard",
              leaderboard: @leaderboard, tournament: @tournament, viewer_scope: @viewer_scope %>
 <% end %>
+<%# @foreign_club is the site-admin cross-club view: answers show, answer links do not. %>
+<%= render "tournaments/what_worked",
+           tournament: @tournament,
+           items: Questionnaires::WhatWorked.call(
+             tournament: @tournament, rows: @leaderboard,
+             viewer: current_user, club: (@foreign_club ? nil : current_club)
+           ) %>
 <%= turbo_frame_tag "catch_photo_modal" %>
