@@ -40,11 +40,31 @@ class HeatMapSystemTest < ApplicationSystemTestCase
     flunk "the heat canvas never painted"
   end
 
-  test "the member map draws heat, and unticking a species changes the count and the map" do
+  test "a member's map draws heat for Walleye only, with no species boxes" do
     3.times { |i| log_catch(species: @walleye, latitude: 49.76 + i * 0.002) }
     2.times { |i| log_catch(species: @pike, latitude: 49.70 + i * 0.002) }
 
     sign_in_as(@member)
+    visit map_catches_path
+    click_link "Club heat map"
+
+    assert_text "Showing 3 catches"
+    assert_text "Showing Walleye"
+    assert_no_field "Pike"
+    wait_for_heat("#heat-map")
+
+    fill_in "Min length (in)", with: "30"
+    click_button "Update map"
+
+    assert_text "Showing 0 catches"
+    assert_text "No catches match these filters."
+  end
+
+  test "a site admin's map draws heat, and unticking a species changes the count and the map" do
+    3.times { |i| log_catch(species: @walleye, latitude: 49.76 + i * 0.002) }
+    2.times { |i| log_catch(species: @pike, latitude: 49.70 + i * 0.002) }
+
+    sign_in_as(create(:user, club: @club, admin: true))
     visit map_catches_path
     click_link "Club heat map"
 
@@ -62,7 +82,7 @@ class HeatMapSystemTest < ApplicationSystemTestCase
 
   test "Select none then Update map shows the empty state and no canvas" do
     log_catch
-    sign_in_as(@member)
+    sign_in_as(create(:user, club: @club, admin: true))
     visit heat_map_catches_path
     wait_for_heat("#heat-map")
 

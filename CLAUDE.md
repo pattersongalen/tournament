@@ -127,7 +127,7 @@ Test directories: `test/models/`, `test/controllers/` (including api/judges/orga
 - Enums stored as integers
 - No member self-signup; organizers add members
 - Catch photo detail pages gated to organizers/judges only
-- Other members' catch coordinates are shown rounded to 2 decimals (about 1 km). The club heat map (`/catches/heat_map`) is the one deliberate exception: it uses exact coordinates, is off per club until a site admin turns it on (`clubs.heat_map_enabled`), and sends the browser coordinates only. Do not add rounding, jitter or a minimum-angler rule to it, and do not add any other catch detail to its pages, without asking first.
+- Other members' catch coordinates are shown rounded to 2 decimals (about 1 km). The club heat map (`/catches/heat_map`) is the one deliberate exception: it uses exact coordinates, is off per club until a site admin turns it on (`clubs.heat_map_enabled`), and sends the browser coordinates only. Only a site admin can choose its species; members and organizers see Walleye only (not Tagged Walleye), enforced in `CatchesController#heat_map`. Do not add rounding, jitter or a minimum-angler rule to it, and do not add any other catch detail to its pages, without asking first.
 
 ## Branching workflow
 

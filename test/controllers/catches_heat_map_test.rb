@@ -8,6 +8,7 @@ class CatchesHeatMapTest < ActionDispatch::IntegrationTest
     @angler = create(:user, club: @club, name: "Secretive Sam")
     @walleye = create(:species, name: "Walleye")
     @pike = create(:species, name: "Pike")
+    @site_admin = create(:user, club: @club, admin: true, name: "Admin Ada")
   end
 
   def log_catch(**overrides)
@@ -22,9 +23,8 @@ class CatchesHeatMapTest < ActionDispatch::IntegrationTest
 
   test "access: who can open the page, by club switch" do
     organizer = create(:user, club: @club, role: :organizer)
-    site_admin = create(:user, club: @club, admin: true)
 
-    { "member" => @member, "organizer" => organizer, "site admin" => site_admin }.each do |label, user|
+    { "member" => @member, "organizer" => organizer, "site admin" => @site_admin }.each do |label, user|
       sign_in_as(user)
 
       @club.update!(heat_map_enabled: true)
@@ -117,11 +117,11 @@ class CatchesHeatMapTest < ActionDispatch::IntegrationTest
     assert_equal [[49.0, -95.0]], points_on_page
   end
 
-  test "each filter narrows the points" do
+  test "a site admin can narrow the points with each filter" do
     log_catch(species: @walleye, length_inches: 15, latitude: 1.0, captured_at_device: 5.days.ago)
     log_catch(species: @walleye, length_inches: 25, latitude: 2.0, captured_at_device: 40.days.ago)
     log_catch(species: @pike,    length_inches: 30, latitude: 3.0, captured_at_device: 5.days.ago)
-    sign_in_as(@member)
+    sign_in_as(@site_admin)
 
     lats = ->(params) {
       get heat_map_catches_path, params: params
@@ -137,9 +137,62 @@ class CatchesHeatMapTest < ActionDispatch::IntegrationTest
     assert_equal [2.0], lats.call(filtered: "1", species: [@walleye.id], min_length: "20")
   end
 
-  test "unticking every species shows the empty state, not everything" do
-    log_catch
+  # Only a site admin may map other species. Members and organizers alike see
+  # Walleye, whatever the query string asks for.
+  test "members and organizers see only Walleye, whatever species they ask for" do
+    tagged = create(:species, name: Species::TAGGED_WALLEYE_NAME)
+    log_catch(species: @walleye, latitude: 1.0)
+    log_catch(species: @pike,    latitude: 2.0)
+    log_catch(species: tagged,   latitude: 3.0, tag_number: "X1795")
+    organizer = create(:user, club: @club, role: :organizer)
+
+    { "member" => @member, "organizer" => organizer }.each do |label, user|
+      sign_in_as(user)
+      [
+        {},
+        { filtered: "1", species: [@pike.id] },
+        { filtered: "1", species: [@pike.id, tagged.id, @walleye.id] },
+        { filtered: "1" }
+      ].each do |params|
+        get heat_map_catches_path, params: params
+        assert_response :success
+        assert_equal [1.0], points_on_page.map(&:first), "#{label}, #{params.inspect}"
+      end
+    end
+  end
+
+  test "members and organizers can still narrow Walleye by length and date" do
+    log_catch(species: @walleye, length_inches: 15, latitude: 1.0, captured_at_device: 5.days.ago)
+    log_catch(species: @walleye, length_inches: 25, latitude: 2.0, captured_at_device: 40.days.ago)
+    log_catch(species: @pike,    length_inches: 30, latitude: 3.0, captured_at_device: 5.days.ago)
     sign_in_as(@member)
+
+    get heat_map_catches_path, params: { min_length: "20" }
+    assert_equal [2.0], points_on_page.map(&:first)
+
+    get heat_map_catches_path, params: { from: 10.days.ago.to_date.iso8601, to: Date.current.iso8601 }
+    assert_equal [1.0], points_on_page.map(&:first)
+  end
+
+  test "members and organizers get no species boxes, only a Walleye label" do
+    organizer = create(:user, club: @club, role: :organizer)
+
+    { "member" => @member, "organizer" => organizer }.each do |label, user|
+      sign_in_as(user)
+      get heat_map_catches_path
+
+      assert_select "input[name='species[]']", 0, label
+      assert_select "input[name=filtered]", 0, label
+      assert_select "button", text: "Select all", count: 0
+      assert_select "#heat-map-species", text: "Showing Walleye"
+      assert_select "input[name=min_length]", 1, label
+      assert_select "input[type=date][name=from]", 1, label
+    end
+  end
+
+  test "a site admin unticking every species shows the empty state, not everything" do
+    log_catch
+    sign_in_as(@site_admin)
     get heat_map_catches_path, params: { filtered: "1" }
 
     assert_response :success
@@ -148,8 +201,8 @@ class CatchesHeatMapTest < ActionDispatch::IntegrationTest
     assert_select "#heat-map-count", text: "Showing 0 catches"
   end
 
-  test "the form reflects the filters in use" do
-    sign_in_as(@member)
+  test "the form reflects the filters a site admin has in use" do
+    sign_in_as(@site_admin)
     get heat_map_catches_path, params: { filtered: "1", species: [@pike.id], min_length: "18.5",
                                          from: "2026-05-01", to: "2026-06-15" }
 

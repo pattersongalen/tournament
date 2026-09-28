@@ -55,9 +55,16 @@ class CatchesController < ApplicationController
   # The club heat map: every active member's catches at their EXACT
   # coordinates. It exists only while a site admin has the club's switch on;
   # otherwise this is a 404, the same as a page that was never built.
+  #
+  # Only a site admin chooses the species. Everyone else, organizers
+  # included, sees Walleye: the species list is narrowed here and their
+  # species params are dropped, so a hand-written query string changes nothing.
   def heat_map
+    @species_filterable = current_user.admin?
     @species = Species.in_log_order
-    @filters = Catches::HeatMapFilters.from_params(params, species: @species)
+    @species = @species.select(&:walleye?) unless @species_filterable
+    filter_params = @species_filterable ? params : params.except(:filtered, :species)
+    @filters = Catches::HeatMapFilters.from_params(filter_params, species: @species)
     @points = Catches::HeatMapPoints.call(club: current_club, **@filters.to_query)
   end
 
