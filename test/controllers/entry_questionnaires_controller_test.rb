@@ -106,26 +106,51 @@ class EntryQuestionnairesControllerTest < ActionDispatch::IntegrationTest
       "teammate on the top-3 boat"               => [@first.users.order(:id).last, @first, :success],
       "member of another top-3 boat"             => [rival,         @first,  :not_found],
       "member with no boat"                      => [outsider,      @first,  :not_found],
-      "member of the 4th boat, own boat"         => [fourth_member, @fourth, :not_found],
+      "member of the 4th boat, own boat"         => [fourth_member, @fourth, :not_asked],
       "organizer, eligible boat"                 => [organizer,     @first,  :success],
       "deputy, eligible boat"                    => [deputy,        @first,  :success],
       "site admin, eligible boat"                => [site_admin,    @first,  :success],
-      "organizer, boat outside the top 3"        => [organizer,     @fourth, :not_found]
+      "organizer, boat outside the top 3"        => [organizer,     @fourth, :not_asked]
     }
 
     cases.each do |label, (user, entry, expected)|
       sign_in_as(user)
       get edit_tournament_entry_questionnaire_path(@tournament, entry)
-      assert_response expected, "#{label}: edit"
+      if expected == :not_asked
+        assert_redirected_to tournament_path(@tournament), "#{label}: edit"
+      else
+        assert_response expected, "#{label}: edit"
+      end
 
       patch tournament_entry_questionnaire_path(@tournament, entry), params: answers
-      if expected == :success
+      case expected
+      when :success
         assert_redirected_to tournament_path(@tournament), "#{label}: update"
+        assert_equal 1, EntryQuestionnaire.count, "#{label}: update saves"
+      when :not_asked
+        assert_redirected_to tournament_path(@tournament), "#{label}: update"
+        assert_equal 0, EntryQuestionnaire.count, "#{label}: update saves nothing"
       else
         assert_response :not_found, "#{label}: update"
       end
       EntryQuestionnaire.delete_all
     end
+  end
+
+  # The "You placed 3rd" push is sent once, when the tournament ends. A catch
+  # that syncs afterwards can move the boat out, and its link must still land
+  # somewhere that explains why.
+  test "a boat pushed out of the top 3 before answering is sent to the tournament page with a reason" do
+    third_member = @third.users.first
+    sign_in_as(third_member)
+    get edit_tournament_entry_questionnaire_path(@tournament, @third)
+    assert_response :success
+
+    add_boat(@tournament, length: 27)
+
+    get edit_tournament_entry_questionnaire_path(@tournament, @third)
+    assert_redirected_to tournament_path(@tournament)
+    assert_match(/not in the top three/, flash[:notice])
   end
 
   test "a boat that dropped out of the top 3 may still edit answers it already gave" do

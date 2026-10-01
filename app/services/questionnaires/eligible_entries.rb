@@ -23,6 +23,9 @@ module Questionnaires
     # shipped). A club with every question retired asks nobody.
     def self.asks?(tournament)
       return false unless tournament.awards_season_points? && tournament.ended?
+      # Tagged is won by the draw; its rows rank by ticket count, which says
+      # nothing about who won, so there is no top three to ask.
+      return false if tournament.format_tagged?
       # Hidden length has no standings until the ended job rolls the target.
       return false if tournament.format_hidden_length? && tournament.hidden_length_target.nil?
 

@@ -157,6 +157,53 @@ class Questionnaires::PendingForTest < ActiveSupport::TestCase
     assert_equal ["Fine"], pending.map { |p| p[:tournament].name }
   end
 
+  # The test environment runs a null store; these two need a real one.
+  def with_memory_cache
+    original = Rails.cache
+    Rails.cache = ActiveSupport::Cache::MemoryStore.new
+    yield
+  ensure
+    Rails.cache = original
+  end
+
+  # Most members finish outside the top three, get no card to dismiss, and
+  # would otherwise rebuild every recent leaderboard on each home page load.
+  test "a tournament's top three is built once, then read from the cache" do
+    club = asking_club
+    _tournament, mine, me = finish_in(4, club: club)
+
+    # Counts builds, not queries: the query cache answers a repeated SELECT
+    # inside a test, which would hide a second build.
+    builds = 0
+    original = Leaderboards::Build.method(:call)
+    counting = ->(**args) { builds += 1; original.call(**args) }
+
+    with_memory_cache do
+      with_class_method_stub(Leaderboards::Build, :call, counting) do
+        2.times do
+          assert_empty Questionnaires::PendingFor.call(user: me, club: club).select { |p| p[:entry].id == mine.id }
+        end
+      end
+    end
+
+    assert_equal 1, builds
+  end
+
+  test "a change in the standings reaches the card once the cached top three expires" do
+    club = asking_club
+    tournament, mine, me = finish_in(4, club: club)
+
+    with_memory_cache do
+      assert_empty Questionnaires::PendingFor.call(user: me, club: club)
+      disqualify(tournament.tournament_entries.where.not(id: mine.id).first)
+
+      travel Questionnaires::PendingFor::CACHE_FOR + 1.second do
+        item = Questionnaires::PendingFor.call(user: me, club: club).first
+        assert_equal [mine.id, 3], [item[:entry].id, item[:place]]
+      end
+    end
+  end
+
   test "a nil user or nil club returns nothing" do
     club = asking_club
     assert_empty Questionnaires::PendingFor.call(user: nil, club: club)

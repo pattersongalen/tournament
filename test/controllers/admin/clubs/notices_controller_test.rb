@@ -93,6 +93,23 @@ class Admin::Clubs::NoticesControllerTest < ActionDispatch::IntegrationTest
     assert_equal [@bob.id], notice.recipients.pluck(:user_id)
   end
 
+  # The form cannot offer a deactivated member, so an edit must not read their
+  # missing checkbox as "remove": they are due again once reactivated.
+  test "update keeps a recipient who is deactivated at the time of the edit" do
+    notice = create(:club_notice, club: @club, title: "Old")
+    gone = create(:user, club: @club, role: :member, name: "Gone Gary")
+    create(:club_notice_recipient, club_notice: notice, user: @alice)
+    create(:club_notice_recipient, club_notice: notice, user: gone)
+    gone.update!(deactivated_at: Time.current)
+    sign_in_as(@admin)
+
+    patch admin_club_notice_path(@club, notice),
+          params: valid_params(title: "New").merge(member_ids: [@alice.id])
+
+    assert_equal "New", notice.reload.title
+    assert_equal [@alice.id, gone.id].sort, notice.recipients.pluck(:user_id).sort
+  end
+
   test "removing a recipient keeps the acknowledgments they already made" do
     notice = create(:club_notice, club: @club)
     create(:club_notice_recipient, club_notice: notice, user: @alice)
@@ -194,6 +211,23 @@ class Admin::Clubs::NoticesControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "Upcoming one"
     assert_includes response.body, "Ended one"
     assert_not_includes response.body, "Other club notice"
+    assert_includes response.body, "1 of 2 acknowledged today"
+  end
+
+  # A deactivated member is never shown the popup, so counting them would
+  # leave the admin chasing an acknowledgment that cannot happen.
+  test "index leaves deactivated recipients out of both sides of the count" do
+    active = create(:club_notice, club: @club, title: "Active one",
+                    starts_on: Date.current - 1, ends_on: Date.current + 1)
+    gone = create(:user, club: @club, role: :member, name: "Gone Gary")
+    [@alice, @bob, gone].each { |user| create(:club_notice_recipient, club_notice: active, user: user) }
+    create(:club_notice_acknowledgment, club_notice: active, user: @alice, acknowledged_on: Date.current)
+    create(:club_notice_acknowledgment, club_notice: active, user: gone, acknowledged_on: Date.current)
+    gone.update!(deactivated_at: Time.current)
+
+    sign_in_as(@admin)
+    get admin_club_notices_path(@club)
+
     assert_includes response.body, "1 of 2 acknowledged today"
   end
 

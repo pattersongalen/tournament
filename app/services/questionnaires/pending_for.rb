@@ -1,10 +1,11 @@
 module Questionnaires
   # The questionnaires a member should be prompted for on the home page.
   # One query narrows to the member's own entries in recent season-points
-  # tournaments that are unanswered and undismissed; leaderboards are built
-  # only for those, to check the boat is currently in the top three.
+  # tournaments that are unanswered and undismissed; only those have their
+  # top three looked up, to check the boat is in it.
   class PendingFor
     WINDOW = 14.days
+    CACHE_FOR = 5.minutes
 
     def self.call(user:, club:, now: Time.current)
       return [] if user.nil? || club.nil? || user.deactivated?
@@ -19,20 +20,29 @@ module Questionnaires
         # Every candidate shares this club; hand it over rather than let each
         # tournament load its own copy.
         entry.tournament.club = club
-        hit = eligible_for(entry.tournament).find { |e| e[:entry].id == entry.id }
-        { tournament: entry.tournament, entry: entry, place: hit[:place] } if hit
+        place = places_for(entry.tournament)[entry.id]
+        { tournament: entry.tournament, entry: entry, place: place } if place
       end
     end
 
+    # { entry id => place } for the tournament's top three, kept for
+    # CACHE_FOR. Most members finish outside it and get no card to dismiss, so
+    # without this every home page load rebuilds each recent leaderboard. The
+    # cost is that a change in the standings takes up to CACHE_FOR to reach
+    # the card; the form itself always checks the live standings.
+    #
     # This runs on the home page, which holds the Log Catch button. A
-    # leaderboard that fails to build costs the member a card, never the page.
-    def self.eligible_for(tournament)
-      EligibleEntries.call(tournament: tournament)
+    # leaderboard that fails to build costs the member a card, never the
+    # page, and the failure is not cached.
+    def self.places_for(tournament)
+      ::Rails.cache.fetch("questionnaires/top_three/#{tournament.id}", expires_in: CACHE_FOR) do
+        EligibleEntries.call(tournament: tournament).to_h { |item| [item[:entry].id, item[:place]] }
+      end
     rescue StandardError => e
       ::Rails.logger.error("questionnaire eligibility failed for tournament #{tournament.id}: #{e.class}: #{e.message}")
-      []
+      {}
     end
-    private_class_method :eligible_for
+    private_class_method :places_for
 
     def self.candidates(user, club, start, now)
       dismissed = ::EntryQuestionnaireDismissal.where(user_id: user.id).select(:tournament_entry_id)

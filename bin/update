@@ -21,11 +21,18 @@ git restore --source=HEAD --staged --worktree app/assets/builds/tailwind.css db/
 # A previous failed pull leaves its autostash entry behind. Drop each one
 # that holds nothing but those regenerated files; anything else is a hand
 # edit somebody made on this box, so it is left in place and named.
+# A stash is dropped only when its file list was read, is not empty and
+# names nothing else -- anything short of that leaves it alone. The list is
+# captured rather than piped so a read error or an early grep exit cannot
+# be mistaken for "only build artifacts", and it includes untracked files,
+# which a plain `stash show` leaves out.
 # Highest index first: dropping renumbers the entries below it.
 for ref in $(git stash list --format=%gd | tac); do
-  if git stash show --name-only "$ref" | grep -qvE '^(app/assets/builds/tailwind\.css|db/schema\.rb)$'; then
+  if ! files=$(git stash show --include-untracked --name-only "$ref") || [ -z "$files" ]; then
+    echo "!!  $ref could not be read; leaving it."
+  elif grep -qvE '^(app/assets/builds/tailwind\.css|db/schema\.rb)$' <<<"$files"; then
     echo "!!  $ref holds edits beyond build artifacts; leaving it:"
-    git stash show --name-only "$ref" | sed 's/^/      /'
+    sed 's/^/      /' <<<"$files"
   else
     git stash drop -q "$ref"
   fi

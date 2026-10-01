@@ -6,7 +6,11 @@ class Admin::Clubs::NoticesController < Admin::Clubs::BaseController
   def index
     @notices = @foreign_club.notices.order(starts_on: :desc, id: :desc).to_a
     ids = @notices.map(&:id)
-    @recipient_counts = ClubNoticeRecipient.where(club_notice_id: ids).group(:club_notice_id).count
+    # Both sides count active members only: a deactivated recipient is never
+    # shown the popup (Notices::DueFor), so "N of M" could never fill up.
+    @recipient_counts = ClubNoticeRecipient.where(club_notice_id: ids)
+                                           .joins(:user).merge(User.active)
+                                           .group(:club_notice_id).count
     # Counts only acknowledgments from members who are still recipients, so
     # "N of M" can never read higher than M.
     @acknowledged_today_counts = ClubNoticeAcknowledgment
@@ -14,6 +18,7 @@ class Admin::Clubs::NoticesController < Admin::Clubs::BaseController
       .joins("INNER JOIN club_notice_recipients r " \
              "ON r.club_notice_id = club_notice_acknowledgments.club_notice_id " \
              "AND r.user_id = club_notice_acknowledgments.user_id")
+      .joins(:user).merge(User.active)
       .group("club_notice_acknowledgments.club_notice_id")
       .count
   end
@@ -95,11 +100,14 @@ class Admin::Clubs::NoticesController < Admin::Clubs::BaseController
   end
 
   # Only ids the form could have offered (this club's active members) count;
-  # anything else in member_ids is dropped. Acknowledgments are not touched,
-  # so a removed recipient keeps their history.
+  # anything else in member_ids is dropped. Removal is limited to the same
+  # ids: a recipient the form could not offer (deactivated today) has no
+  # checkbox to leave ticked, so they stay and are due again if reactivated.
+  # Acknowledgments are not touched, so a removed recipient keeps their history.
   def sync_recipients
-    wanted = selectable_memberships.map(&:user_id) & submitted_member_ids
-    @notice.recipients.where.not(user_id: wanted).delete_all
+    offered = selectable_memberships.map(&:user_id)
+    wanted = offered & submitted_member_ids
+    @notice.recipients.where(user_id: offered - wanted).delete_all
     existing = @notice.recipients.pluck(:user_id)
     (wanted - existing).each { |user_id| @notice.recipients.create!(user_id: user_id) }
   end

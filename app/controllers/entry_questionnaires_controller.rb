@@ -22,7 +22,10 @@ class EntryQuestionnairesController < ApplicationController
   private
 
   # 404 rather than 403 throughout: a member has no business learning which
-  # boats exist in a tournament they cannot answer for.
+  # boats exist in a tournament they cannot answer for. The one exception is
+  # somebody who may answer for the boat when the boat is not being asked:
+  # the "You placed 3rd" push is sent once, at the end, and a catch that
+  # syncs later can move the boat out, so that link explains itself.
   def load_and_authorize
     raise ActiveRecord::RecordNotFound unless current_club
 
@@ -36,8 +39,11 @@ class EntryQuestionnairesController < ApplicationController
 
     on_boat = @entry.tournament_entry_members.exists?(user_id: current_user.id)
     staff = current_user.admin? || current_user.organizer_in?(current_club)
-    allowed = (on_boat || staff) && (@place.present? || @questionnaire.present?)
-    raise ActiveRecord::RecordNotFound unless allowed
+    raise ActiveRecord::RecordNotFound unless on_boat || staff
+    return if @place.present? || @questionnaire.present?
+
+    redirect_to tournament_path(@tournament),
+                notice: "That boat is not in the top three, so it has no questions to answer."
   end
 
   # Only string values keyed by question id survive; any other shape is

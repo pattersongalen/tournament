@@ -113,6 +113,26 @@ class Questionnaires::EligibleEntriesTest < ActiveSupport::TestCase
     assert_equal 2, result.size
   end
 
+  # A Tagged tournament is won by the draw, not by ticket count, so the first
+  # three leaderboard rows are not its top three.
+  test "tagged: nobody is asked, because the draw decides the winner" do
+    tagged = Species.find_or_create_by!(name: "Tagged Walleye")
+    tournament = build(:tournament, club: @club, name: "Tagged night", awards_season_points: true,
+                       mode: :solo, format: :tagged, starts_at: 1.day.ago - 4.hours, ends_at: 1.day.ago)
+    tournament.scoring_slots.build(species: tagged, slot_count: 1)
+    tournament.save!
+    user = create(:user, club: @club)
+    entry = create(:tournament_entry, tournament: tournament)
+    create(:tournament_entry_member, tournament_entry: entry, user: user)
+    caught = create(:catch, user: user, species: tagged, length_inches: 20, tag_number: "A0001",
+                    captured_at_device: tournament.ends_at - 1.hour)
+    create(:catch_placement, catch: caught, tournament: tournament, tournament_entry: entry,
+           species: tagged, slot_index: 0)
+
+    assert_equal false, Questionnaires::EligibleEntries.asks?(tournament)
+    assert_equal [], Questionnaires::EligibleEntries.call(tournament: tournament)
+  end
+
   test "rows passed in are used instead of building the leaderboard again" do
     tournament = season_tournament(club: @club)
     add_boat(tournament, length: 25)

@@ -28,6 +28,9 @@ module Questionnaires
           q.tournament_id = entry.tournament_id
           q.submitted_by_user = user
         end
+        # This UPDATE also takes the questionnaire's row lock until commit, so
+        # a teammate saving at the same moment waits here and then reads the
+        # answer rows this save wrote. Keep it ahead of the answer writes.
         questionnaire.update!(updated_by_user: user, updated_at: Time.current)
 
         cleaned.each do |question, body|
