@@ -125,8 +125,8 @@ class HeatMapSystemTest < ApplicationSystemTestCase
   # Leaflet.heat scales every point down by zoom unless told not to: at zoom
   # 15 a catch would count as 1/8, so "Catches needed for red" = 1 would need
   # eight catches, and the map would change brightness as a member zooms.
-  test "with red set to one catch and no floor, a single catch is drawn at full strength" do
-    @club.update!(heat_map_max: 1, heat_map_min_opacity: 0)
+  test "with red set to one catch and the lowest floor, a single catch is drawn at full strength" do
+    @club.update!(heat_map_max: 1, heat_map_min_opacity: 1)
     log_catch
     sign_in_as(@member)
     visit heat_map_catches_path
@@ -172,6 +172,30 @@ class HeatMapSystemTest < ApplicationSystemTestCase
       })()
     JS
     assert_equal({ "zoom" => true, "map" => true, "button" => true }, on_top)
+  end
+
+  # The popup must not depend on each map remembering `isolate`: it sits above
+  # Leaflet's highest z-index on its own.
+  test "a due notice covers a map whose container does not isolate its z-indexes" do
+    notice = create(:club_notice, club: @club, title: "Read me", starts_on: Date.current, ends_on: Date.current)
+    create(:club_notice_recipient, club_notice: notice, user: @member)
+    log_catch
+    sign_in_as(@member)
+    visit heat_map_catches_path
+    assert page.has_css?("#notice-popup")
+    assert page.has_css?("#heat-map .leaflet-control-zoom-in", wait: 10)
+
+    zoom_covered = page.evaluate_script(<<~JS)
+      (function () {
+        var map = document.querySelector("#heat-map");
+        map.classList.remove("isolate");
+        map.scrollIntoView({ block: "center" });
+        var r = map.querySelector(".leaflet-control-zoom-in").getBoundingClientRect();
+        var hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !!(hit && hit.closest("#notice-popup"));
+      })()
+    JS
+    assert zoom_covered, "the popup must cover the zoom buttons without help from the map"
   end
 
   test "going Back to the heat map rebuilds one map, not two" do

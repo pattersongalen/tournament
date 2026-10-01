@@ -25,11 +25,13 @@ class Admin::Clubs::HeatMapsController < Admin::Clubs::BaseController
     params.require(:club).permit(:heat_map_enabled, *Club::HEAT_MAP_RANGES.keys)
   end
 
-  # The member page's default view: every species, the last 12 months.
+  # The member page's default view: Walleye, the last 12 months. Members see
+  # no other species (CatchesController#heat_map), so the sliders are tuned
+  # against the map they will actually get.
   def load_preview
     @points = Catches::HeatMapPoints.call(
       club: @foreign_club,
-      species_ids: Species.pluck(:id),
+      species_ids: Species.all.select(&:walleye?).map(&:id),
       from: Date.current - Catches::HeatMapFilters::DEFAULT_SPAN,
       to: Date.current
     )

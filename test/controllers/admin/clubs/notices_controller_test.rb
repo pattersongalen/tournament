@@ -249,6 +249,27 @@ class Admin::Clubs::NoticesControllerTest < ActionDispatch::IntegrationTest
     assert_select "#notice-former-recipients", text: /Oct 3, 2026/
   end
 
+  # Same rule as the index count: a deactivated recipient is never shown the
+  # popup, so "Not acknowledged yet" beside their name could never change.
+  test "show lists a deactivated recipient only for the acknowledgments they made" do
+    notice = create(:club_notice, club: @club, title: "Shown")
+    gone = create(:user, club: @club, role: :member, name: "Gone Gary")
+    quit = create(:user, club: @club, role: :member, name: "Quit Quinn")
+    [@alice, gone, quit].each { |user| create(:club_notice_recipient, club_notice: notice, user: user) }
+    create(:club_notice_acknowledgment, club_notice: notice, user: quit,
+           acknowledged_on: Date.new(2026, 10, 2))
+    [gone, quit].each { |user| user.update!(deactivated_at: Time.current) }
+
+    sign_in_as(@admin)
+    get admin_club_notice_path(@club, notice)
+
+    assert_select "#notice-recipients", text: /Alice/
+    assert_select "#notice-recipients", text: /Quit Quinn/, count: 0
+    assert_not_includes response.body, "Gone Gary"
+    assert_select "#notice-former-recipients", text: /Quit Quinn/
+    assert_select "#notice-former-recipients", text: /Oct 2, 2026/
+  end
+
   test "destroy deletes the notice with its recipients and acknowledgments" do
     notice = create(:club_notice, club: @club)
     create(:club_notice_recipient, club_notice: notice, user: @alice)

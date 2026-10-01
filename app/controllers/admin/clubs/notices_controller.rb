@@ -25,7 +25,9 @@ class Admin::Clubs::NoticesController < Admin::Clubs::BaseController
 
   def show
     @acknowledgments_by_user_id = @notice.acknowledgments.order(:acknowledged_on).group_by(&:user_id)
-    @recipient_users = @notice.recipient_users.order(:name).to_a
+    # Active members only, as in the index counts. A deactivated recipient
+    # who acknowledged before leaving falls through to the former list below.
+    @recipient_users = @notice.recipient_users.merge(User.active).order(:name).to_a
     former_ids = @acknowledgments_by_user_id.keys - @recipient_users.map(&:id)
     @former_users = User.where(id: former_ids).order(:name).to_a
   end

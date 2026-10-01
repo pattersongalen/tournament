@@ -12,12 +12,14 @@ class Club < ApplicationRecord
   after_create :seed_default_questions
 
   # The club heat map's display tuning, set by a site admin against a live
-  # preview. Ranges are what the admin sliders offer.
+  # preview. Ranges are what the admin sliders offer. Blur and the opacity
+  # floor start at 1: Leaflet.heat reads 0 as "not set" and draws its own
+  # default (blur 15, floor 5%) under a label that says 0.
   HEAT_MAP_RANGES = {
     heat_map_radius: 5..60,
-    heat_map_blur: 0..40,
+    heat_map_blur: 1..40,
     heat_map_max: 1..20,
-    heat_map_min_opacity: 0..80
+    heat_map_min_opacity: 1..80
   }.freeze
   HEAT_MAP_DEFAULTS = {
     heat_map_radius: 25, heat_map_blur: 15, heat_map_max: 5, heat_map_min_opacity: 30

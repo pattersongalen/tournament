@@ -48,8 +48,8 @@ class Admin::Clubs::HeatMapsControllerTest < ActionDispatch::IntegrationTest
     assert_select "label", text: "Members can see the club heat map"
     assert_select "p", text: "While this is on, every member of the club can see the exact location of every catch logged by the club's members."
 
-    { heat_map_radius: [5, 60, 25], heat_map_blur: [0, 40, 15],
-      heat_map_max: [1, 20, 5], heat_map_min_opacity: [0, 80, 30] }.each do |attribute, (min, max, value)|
+    { heat_map_radius: [5, 60, 25], heat_map_blur: [1, 40, 15],
+      heat_map_max: [1, 20, 5], heat_map_min_opacity: [1, 80, 30] }.each do |attribute, (min, max, value)|
       assert_select "input[type=range][name='club[#{attribute}]'][min='#{min}'][max='#{max}'][value='#{value}']" \
                     "[data-default='#{value}']", 1, attribute.to_s
     end
@@ -81,8 +81,12 @@ class Admin::Clubs::HeatMapsControllerTest < ActionDispatch::IntegrationTest
       "radius too big"     => { heat_map_radius: "61" },
       "radius too small"   => { heat_map_radius: "4" },
       "blur not a number"  => { heat_map_blur: "abc" },
+      # Leaflet.heat reads a blur or a floor of 0 as "not set" and draws its
+      # own default, so 0 is not on offer.
+      "blur zero"          => { heat_map_blur: "0" },
       "max zero"           => { heat_map_max: "0" },
       "opacity too high"   => { heat_map_min_opacity: "81" },
+      "opacity zero"       => { heat_map_min_opacity: "0" },
       "decimal"            => { heat_map_radius: "12.5" },
       "blank"              => { heat_map_max: "" }
     }.each do |label, overrides|
@@ -123,6 +127,21 @@ class Admin::Clubs::HeatMapsControllerTest < ActionDispatch::IntegrationTest
     assert_not_includes response.body, "Secretive Sam"
     assert_not_includes response.body, "UNIQUE-NOTE-TEXT"
     assert_not_includes response.body, catch_path(caught)
+  end
+
+  # The sliders are tuned for what members see, and members see Walleye only.
+  test "the preview plots Walleye only, as the member map does" do
+    log_catch(latitude: 49.5, longitude: -95.5)
+    log_catch(species: create(:species, name: "Pike"), latitude: 48.0, longitude: -94.0)
+    log_catch(species: create(:species, name: Species::TAGGED_WALLEYE_NAME), tag_number: "T100",
+              latitude: 47.0, longitude: -93.0)
+
+    sign_in_as(@admin)
+    get edit_admin_club_heat_map_path(@club)
+
+    preview = css_select("#heat-map-preview").first
+    assert_equal [[49.5, -95.5]], JSON.parse(preview["data-heat-map-points-value"])
+    assert_select "p", text: /last 12 months, Walleye only, as members see it: 1 catch\./
   end
 
   test "the preview works while the switch is off" do
