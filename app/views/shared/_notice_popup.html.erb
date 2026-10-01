@@ -1,0 +1,30 @@
+<%# The daily notice popup. Blocking by design: no close button, no backdrop
+    click handler, and notice_popup_controller swallows Escape. The only way
+    out is the form below. data-turbo-temporary keeps it out of Turbo's
+    snapshot cache, so Back can't resurrect a popup already acknowledged.
+    The message scrolls inside the card; the button sits outside the scroll
+    area so it stays reachable under a long message on a phone.
+    z-[1100] puts it above Leaflet's panes and controls (400 to 1000), so a
+    map cannot draw over it whether or not its container isolates them. %>
+<div id="notice-popup"
+     data-turbo-temporary
+     data-controller="notice-popup"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="notice-popup-title"
+     class="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+  <div class="w-full max-w-md max-h-[85vh] flex flex-col rounded-xl bg-slate-800 border border-slate-600 shadow-2xl">
+    <div class="overflow-y-auto p-5">
+      <h2 id="notice-popup-title" class="text-xl font-bold text-white mb-3"><%= club_notice.title %></h2>
+      <%# whitespace-pre-line renders the admin's line breaks, so the tag and
+          the output must be adjacent. %>
+      <p class="text-slate-200 whitespace-pre-line"><%= club_notice.message.strip %></p>
+    </div>
+    <div class="p-5 pt-3 border-t border-slate-700">
+      <%= button_to "I acknowledge", notice_acknowledgment_path(club_notice),
+            method: :post,
+            data: { notice_popup_target: "confirm" },
+            class: "block w-full h-12 px-6 rounded-lg bg-blue-600 active:bg-blue-700 text-white font-semibold" %>
+    </div>
+  </div>
+</div>

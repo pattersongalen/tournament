@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_24_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_27_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -136,6 +136,47 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_24_120000) do
     t.index ["user_id"], name: "index_club_memberships_on_user_id"
   end
 
+  create_table "club_notice_acknowledgments", force: :cascade do |t|
+    t.date "acknowledged_on", null: false
+    t.bigint "club_notice_id", null: false
+    t.datetime "created_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["club_notice_id", "user_id", "acknowledged_on"], name: "idx_club_notice_acks_on_notice_user_day", unique: true
+    t.index ["user_id"], name: "index_club_notice_acknowledgments_on_user_id"
+  end
+
+  create_table "club_notice_recipients", force: :cascade do |t|
+    t.bigint "club_notice_id", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "user_id", null: false
+    t.index ["club_notice_id", "user_id"], name: "index_club_notice_recipients_on_club_notice_id_and_user_id", unique: true
+    t.index ["user_id"], name: "index_club_notice_recipients_on_user_id"
+  end
+
+  create_table "club_notices", force: :cascade do |t|
+    t.bigint "club_id", null: false
+    t.datetime "created_at", null: false
+    t.bigint "created_by_user_id"
+    t.date "ends_on", null: false
+    t.text "message", null: false
+    t.date "starts_on", null: false
+    t.string "title", limit: 120, null: false
+    t.datetime "updated_at", null: false
+    t.index ["club_id", "starts_on", "ends_on"], name: "index_club_notices_on_club_id_and_starts_on_and_ends_on"
+    t.index ["created_by_user_id"], name: "index_club_notices_on_created_by_user_id"
+  end
+
+  create_table "club_questions", force: :cascade do |t|
+    t.bigint "club_id", null: false
+    t.datetime "created_at", null: false
+    t.integer "position", null: false
+    t.string "prompt", limit: 80, null: false
+    t.datetime "retired_at"
+    t.datetime "updated_at", null: false
+    t.index ["club_id", "position"], name: "index_club_questions_on_club_id_and_position"
+  end
+
   create_table "club_rules_revisions", force: :cascade do |t|
     t.bigint "club_id", null: false
     t.datetime "created_at", null: false
@@ -152,7 +193,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_24_120000) do
     t.string "banner_message"
     t.integer "banner_style", default: 0, null: false
     t.datetime "created_at", null: false
+    t.integer "heat_map_blur", default: 15, null: false
+    t.boolean "heat_map_enabled", default: false, null: false
+    t.integer "heat_map_max", default: 5, null: false
+    t.integer "heat_map_min_opacity", default: 30, null: false
+    t.integer "heat_map_radius", default: 25, null: false
     t.string "name", null: false
+    t.datetime "questionnaires_start_at"
     t.boolean "recovery_tool_enabled", default: false, null: false
     t.decimal "season_points_attendance", precision: 5, scale: 2, default: "0.5", null: false
     t.jsonb "season_points_base_ladder", default: [3, 2, 1], null: false
@@ -162,6 +209,35 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_24_120000) do
     t.jsonb "season_points_tier_multipliers", default: [1, 2, 3, 3], null: false
     t.datetime "updated_at", null: false
     t.index ["name"], name: "index_clubs_on_name", unique: true
+  end
+
+  create_table "entry_questionnaire_answers", force: :cascade do |t|
+    t.string "body", limit: 200, null: false
+    t.bigint "club_question_id", null: false
+    t.bigint "entry_questionnaire_id", null: false
+    t.index ["club_question_id"], name: "index_entry_questionnaire_answers_on_club_question_id"
+    t.index ["entry_questionnaire_id", "club_question_id"], name: "idx_questionnaire_answers_on_questionnaire_and_question", unique: true
+  end
+
+  create_table "entry_questionnaire_dismissals", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.bigint "tournament_entry_id", null: false
+    t.bigint "user_id", null: false
+    t.index ["tournament_entry_id", "user_id"], name: "idx_questionnaire_dismissals_on_entry_and_user", unique: true
+    t.index ["user_id"], name: "index_entry_questionnaire_dismissals_on_user_id"
+  end
+
+  create_table "entry_questionnaires", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.bigint "submitted_by_user_id"
+    t.bigint "tournament_entry_id", null: false
+    t.bigint "tournament_id", null: false
+    t.datetime "updated_at", null: false
+    t.bigint "updated_by_user_id"
+    t.index ["submitted_by_user_id"], name: "index_entry_questionnaires_on_submitted_by_user_id"
+    t.index ["tournament_entry_id"], name: "index_entry_questionnaires_on_tournament_entry_id", unique: true
+    t.index ["tournament_id"], name: "index_entry_questionnaires_on_tournament_id"
+    t.index ["updated_by_user_id"], name: "index_entry_questionnaires_on_updated_by_user_id"
   end
 
   create_table "judge_actions", force: :cascade do |t|
@@ -505,8 +581,23 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_24_120000) do
   add_foreign_key "catches", "users", column: "logged_by_user_id"
   add_foreign_key "club_memberships", "clubs"
   add_foreign_key "club_memberships", "users"
+  add_foreign_key "club_notice_acknowledgments", "club_notices", on_delete: :cascade
+  add_foreign_key "club_notice_acknowledgments", "users", on_delete: :cascade
+  add_foreign_key "club_notice_recipients", "club_notices", on_delete: :cascade
+  add_foreign_key "club_notice_recipients", "users", on_delete: :cascade
+  add_foreign_key "club_notices", "clubs"
+  add_foreign_key "club_notices", "users", column: "created_by_user_id", on_delete: :nullify
+  add_foreign_key "club_questions", "clubs"
   add_foreign_key "club_rules_revisions", "clubs"
   add_foreign_key "club_rules_revisions", "users", column: "edited_by_user_id"
+  add_foreign_key "entry_questionnaire_answers", "club_questions", on_delete: :cascade
+  add_foreign_key "entry_questionnaire_answers", "entry_questionnaires", on_delete: :cascade
+  add_foreign_key "entry_questionnaire_dismissals", "tournament_entries", on_delete: :cascade
+  add_foreign_key "entry_questionnaire_dismissals", "users", on_delete: :cascade
+  add_foreign_key "entry_questionnaires", "tournament_entries", on_delete: :cascade
+  add_foreign_key "entry_questionnaires", "tournaments", on_delete: :cascade
+  add_foreign_key "entry_questionnaires", "users", column: "submitted_by_user_id", on_delete: :nullify
+  add_foreign_key "entry_questionnaires", "users", column: "updated_by_user_id", on_delete: :nullify
   add_foreign_key "judge_actions", "catches"
   add_foreign_key "judge_actions", "users", column: "judge_user_id"
   add_foreign_key "push_subscriptions", "users"

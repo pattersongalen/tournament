@@ -53,5 +53,25 @@ class TournamentLifecycleAnnounceJob < ApplicationJob
     if kind == "ended" && tournament.blind_leaderboard?
       Leaderboards::BroadcastReveal.call(tournament: tournament)
     end
+
+    # The top three are asked what worked. Last, and rescued: it builds a
+    # whole leaderboard, and by now the stamp above means a retry returns
+    # early, so a failure here must not take the reveal broadcast with it.
+    if kind == "ended"
+      begin
+        Questionnaires::EligibleEntries.call(tournament: tournament).each do |item|
+          item[:entry].users.merge(User.active).each do |user|
+            DeliverPushNotificationJob.perform_later(
+              user_id: user.id, title: tournament.name,
+              body: "You placed #{item[:place].ordinalize}. Tell the club what worked.",
+              url: "/tournaments/#{tournament.id}/entries/#{item[:entry].id}/questionnaire/edit",
+              tournament_id: tournament.id
+            )
+          end
+        end
+      rescue StandardError => e
+        Rails.logger.error("questionnaire push failed for tournament #{tournament.id}: #{e.class}: #{e.message}")
+      end
+    end
   end
 end

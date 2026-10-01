@@ -4,6 +4,8 @@ class CatchesController < ApplicationController
 
   before_action :require_sign_in!
   before_action :require_site_admin!, only: :reference_photo
+  skip_notice_popup! only: [:new, :create, :select_species, :select_teammate]
+  before_action :require_heat_map_enabled!, only: :heat_map
 
   def index
     @selected_start, @selected_end = resolve_date_range
@@ -48,6 +50,22 @@ class CatchesController < ApplicationController
         popup: render_to_string(partial: "catches/map_popup", locals: { catch: c }, formats: [:html])
       }
     end
+  end
+
+  # The club heat map: every active member's catches at their EXACT
+  # coordinates. It exists only while a site admin has the club's switch on;
+  # otherwise this is a 404, the same as a page that was never built.
+  #
+  # Only a site admin chooses the species. Everyone else, organizers
+  # included, sees Walleye: the species list is narrowed here and their
+  # species params are dropped, so a hand-written query string changes nothing.
+  def heat_map
+    @species_filterable = current_user.admin?
+    @species = Species.in_log_order
+    @species = @species.select(&:walleye?) unless @species_filterable
+    filter_params = @species_filterable ? params : params.except(:filtered, :species)
+    @filters = Catches::HeatMapFilters.from_params(filter_params, species: @species)
+    @points = Catches::HeatMapPoints.call(club: current_club, **@filters.to_query)
   end
 
   def show
@@ -148,6 +166,10 @@ class CatchesController < ApplicationController
   end
 
   private
+
+  def require_heat_map_enabled!
+    head :not_found unless current_club&.heat_map_enabled?
+  end
 
   def resolve_teammate_or_redirect
     id = params[:teammate_user_id].presence
