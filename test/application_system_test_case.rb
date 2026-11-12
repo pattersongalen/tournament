@@ -13,6 +13,12 @@ Capybara.register_driver :tournament_cuprite do |app|
   )
 end
 
+# Capybara waits 2s by default for a page to show what a test expects. With
+# every core running a headless Chromium, a sign-in POST can take longer than
+# that: the page arrives, just late, and the test fails at a different line
+# each run. 5s only costs time when something is actually missing.
+Capybara.default_max_wait_time = 5
+
 require_relative "support/ios_web_quirks"
 
 class ApplicationSystemTestCase < ActionDispatch::SystemTestCase

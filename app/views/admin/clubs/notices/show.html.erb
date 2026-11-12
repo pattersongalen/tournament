@@ -1,0 +1,51 @@
+<div class="flex items-start justify-between mb-6 gap-4">
+  <div>
+    <h1 class="text-3xl font-bold"><%= @notice.title %></h1>
+    <p class="text-slate-400 mt-1">
+      <%= @foreign_club.name %> ·
+      <%= @notice.starts_on.strftime("%b %-d, %Y") %> – <%= @notice.ends_on.strftime("%b %-d, %Y") %> ·
+      <%= @notice.status.to_s.capitalize %>
+    </p>
+  </div>
+  <%= link_to "Edit", edit_admin_club_notice_path(@foreign_club, @notice),
+              class: "h-11 px-5 inline-flex items-center rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-medium transition-colors" %>
+</div>
+
+<div class="bg-slate-800 rounded-xl border border-slate-700 p-6 mb-8">
+  <p class="text-slate-200 whitespace-pre-line"><%= @notice.message.strip %></p>
+</div>
+
+<h2 class="text-xl font-semibold text-white mb-3">Recipients</h2>
+<div id="notice-recipients" class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden mb-8">
+  <% if @recipient_users.empty? %>
+    <p class="text-slate-400 px-6 py-4">Nobody is set to see this notice.</p>
+  <% else %>
+    <table class="w-full text-left border-collapse">
+      <tbody class="divide-y divide-slate-700">
+        <% @recipient_users.each do |user| %>
+          <%= render "acknowledgment_row", user: user, acknowledgments: @acknowledgments_by_user_id[user.id] || [] %>
+        <% end %>
+      </tbody>
+    </table>
+  <% end %>
+</div>
+
+<% if @former_users.any? %>
+  <h2 class="text-xl font-semibold text-white mb-3">No longer a recipient</h2>
+  <div id="notice-former-recipients" class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden mb-8">
+    <table class="w-full text-left border-collapse">
+      <tbody class="divide-y divide-slate-700">
+        <% @former_users.each do |user| %>
+          <%= render "acknowledgment_row", user: user, acknowledgments: @acknowledgments_by_user_id[user.id] || [] %>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+<% end %>
+
+<div class="flex items-center justify-between">
+  <%= link_to "← All notices", admin_club_notices_path(@foreign_club), class: "text-blue-400 hover:text-blue-300" %>
+  <%= button_to "Delete notice", admin_club_notice_path(@foreign_club, @notice), method: :delete,
+        form: { data: { turbo_confirm: "Delete this notice? Its acknowledgment records will be deleted too." } },
+        class: "h-11 px-5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium transition-colors" %>
+</div>

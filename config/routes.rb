@@ -83,6 +83,15 @@ Rails.application.routes.draw do
           collection { get :history }
         end
         resource :banner, only: [:edit, :update], controller: "banners"
+        resources :notices
+        resources :questions, only: [:index, :create, :update] do
+          member do
+            patch :retire
+            patch :restore
+            patch :move
+          end
+        end
+        resource :heat_map, only: [:edit, :update], controller: "heat_maps"
         resource :season_points, only: [:edit, :update], controller: "season_points"
       end
     end
@@ -140,13 +149,22 @@ Rails.application.routes.draw do
   resources :tournaments, only: [:index, :show] do
     collection { get :archived }
     get :bingo_card, on: :member
+    resources :entries, only: [] do
+      resource :questionnaire, only: [:edit, :update], controller: "entry_questionnaires" do
+        resource :dismissal, only: :create, controller: "entry_questionnaire_dismissals"
+      end
+    end
     scope module: :tournaments do
       resources :catches, only: [:show]
     end
   end
+  resources :notices, only: [] do
+    resource :acknowledgment, only: :create, controller: "notice_acknowledgments"
+  end
   resources :catches, only: [:index, :new, :create, :show, :update] do
     collection do
       get :map
+      get :heat_map
       get :select_teammate
       get :select_species
     end

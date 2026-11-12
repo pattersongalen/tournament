@@ -52,6 +52,25 @@
     <p class="text-slate-400 text-sm">A home-page message shown to selected members.</p>
   <% end %>
 
+  <%= link_to admin_club_notices_path(@club), class: "block p-6 bg-slate-800 rounded-xl border border-slate-700 hover:border-slate-500 transition-colors" do %>
+    <h2 class="text-xl font-semibold text-white mb-2">Notices</h2>
+    <p class="text-slate-400 text-sm">Popups that selected members must acknowledge once a day.</p>
+  <% end %>
+
+  <%= link_to admin_club_questions_path(@club), class: "block p-6 bg-slate-800 rounded-xl border border-slate-700 hover:border-slate-500 transition-colors" do %>
+    <h2 class="text-xl font-semibold text-white mb-2">Questionnaire</h2>
+    <p class="text-slate-400 text-sm">What the top 3 boats are asked after a season-points tournament.</p>
+  <% end %>
+
+  <%= link_to edit_admin_club_heat_map_path(@club), class: "block p-6 bg-slate-800 rounded-xl border border-slate-700 hover:border-slate-500 transition-colors" do %>
+    <h2 class="text-xl font-semibold text-white mb-2">
+      Heat map
+      <% state_classes = @club.heat_map_enabled? ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-200" : "bg-slate-700 border-slate-600 text-slate-300" %>
+      <span data-heat-map-state class="<%= state_classes %> border rounded-full px-3 py-1 text-xs font-medium align-middle ml-2"><%= @club.heat_map_enabled? ? "On" : "Off" %></span>
+    </h2>
+    <p class="text-slate-400 text-sm">A map of where the club catches fish, and how its heat is drawn.</p>
+  <% end %>
+
   <%= link_to edit_admin_club_season_points_path(@club), class: "block p-6 bg-slate-800 rounded-xl border border-slate-700 hover:border-slate-500 transition-colors" do %>
     <h2 class="text-xl font-semibold text-white mb-2">Season points</h2>
     <p class="text-slate-400 text-sm">How many points each placement is worth, and the attendance bonus.</p>

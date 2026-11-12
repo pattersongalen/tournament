@@ -4,6 +4,8 @@ class TournamentEntry < ApplicationRecord
   has_many :tournament_entry_members, dependent: :destroy
   has_many :users, through: :tournament_entry_members
   has_many :catch_placements, dependent: :destroy
+  has_one :questionnaire, class_name: "EntryQuestionnaire", dependent: :destroy
+  has_many :questionnaire_dismissals, class_name: "EntryQuestionnaireDismissal", dependent: :delete_all
 
   # Deleting a boat nullifies its entries, which is only safe once the
   # tournament is over: on a live or upcoming one it drops the entry out of

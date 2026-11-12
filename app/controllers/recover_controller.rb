@@ -5,6 +5,7 @@
 class RecoverController < ApplicationController
   before_action :require_sign_in!
   before_action :require_recovery_enabled!
+  skip_notice_popup!
 
   def index; end
 

@@ -1,0 +1,67 @@
+<%# The local is club_notice, not notice: `notice` is the flash helper in views. %>
+<%= form_with model: club_notice, scope: :club_notice, url: url, method: method do |f| %>
+  <% if club_notice.errors.any? %>
+    <div id="notice-errors" class="bg-red-500/20 border border-red-500/40 text-red-200 rounded-lg px-4 py-3 mb-6">
+      <ul class="list-disc list-inside">
+        <% club_notice.errors.full_messages.each do |message| %>
+          <li><%= message %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="mb-4">
+    <%= f.label :title, "Title", class: "block text-sm text-slate-300 mb-1" %>
+    <%= f.text_field :title, maxlength: ClubNotice::TITLE_MAX,
+          class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100" %>
+  </div>
+
+  <div class="mb-4">
+    <%= f.label :message, "Message", class: "block text-sm text-slate-300 mb-1" %>
+    <%= f.text_area :message, rows: 6, maxlength: ClubNotice::MESSAGE_MAX,
+          class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100" %>
+    <p class="text-slate-400 text-xs mt-1">Plain text. Line breaks are kept.</p>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div>
+      <%= f.label :starts_on, "First day shown", class: "block text-sm text-slate-300 mb-1" %>
+      <%= f.date_field :starts_on,
+            class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100" %>
+    </div>
+    <div>
+      <%= f.label :ends_on, "Last day shown", class: "block text-sm text-slate-300 mb-1" %>
+      <%= f.date_field :ends_on,
+            class: "w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-slate-100" %>
+    </div>
+  </div>
+
+  <fieldset class="mb-6" data-controller="check-all">
+    <legend class="text-sm text-slate-300 mb-2">Who must acknowledge it</legend>
+    <% if memberships.any? %>
+      <div class="flex gap-2 mb-3">
+        <button type="button" data-action="check-all#all"
+                class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium">Select all</button>
+        <button type="button" data-action="check-all#none"
+                class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium">Select none</button>
+      </div>
+      <div class="space-y-2">
+        <% memberships.each do |m| %>
+          <label class="flex items-center gap-2 text-slate-100">
+            <%= check_box_tag "member_ids[]", m.user_id, selected_user_ids.include?(m.user_id),
+                  id: "member_#{m.user_id}", class: "h-4 w-4",
+                  data: { check_all_target: "box" } %>
+            <span><%= m.user.name %></span>
+          </label>
+        <% end %>
+      </div>
+    <% else %>
+      <p class="text-slate-400 text-sm">This club has no active members yet.</p>
+    <% end %>
+  </fieldset>
+
+  <div class="flex gap-3">
+    <%= f.submit submit_label, class: "h-12 px-6 rounded-lg bg-blue-600 active:bg-blue-700 text-white font-semibold" %>
+    <%= link_to "Cancel", cancel_url, class: "h-12 px-6 rounded-lg bg-slate-700 text-slate-100 leading-[3rem]" %>
+  </div>
+<% end %>

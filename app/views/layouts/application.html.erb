@@ -80,6 +80,7 @@
     </script>
     <%= render "shared/ios_install_coach" %>
     <%= render "shared/sync_auth_notice" %>
+    <%= render "shared/notice_popup", club_notice: due_notice if due_notice %>
 
     <% flash.each do |type, message| %>
       <% styles = case type.to_s
