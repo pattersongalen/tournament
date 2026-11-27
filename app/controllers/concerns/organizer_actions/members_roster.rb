@@ -24,6 +24,7 @@ module OrganizerActions
       return if @season_tag.nil?
 
       counts = SeasonPoints::ParticipationCounts.call(club: current_club, season_tag: @season_tag)
+      @placement_counts = SeasonPoints::PlacementCounts.call(club: current_club, season_tag: @season_tag)
       @rows = current_club.members.active.map { |u| [u, counts.fetch(u.id, 0)] }
       @rows.sort_by! { |user, nights| [-nights, user.name.downcase] }
     end
