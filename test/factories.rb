@@ -134,4 +134,45 @@ FactoryBot.define do
     season { :open_water }
     body { "<h1>Rules</h1><div>Be excellent to each other.</div>" }
   end
+
+  factory :club_notice do
+    association :club
+    sequence(:title) { |n| "Notice #{n}" }
+    message { "Please read and acknowledge." }
+    starts_on { Date.current }
+    ends_on { Date.current + 6 }
+  end
+
+  factory :club_notice_recipient do
+    association :club_notice
+    association :user
+  end
+
+  factory :club_notice_acknowledgment do
+    association :club_notice
+    association :user
+    acknowledged_on { Date.current }
+  end
+
+  factory :club_question do
+    association :club
+    sequence(:prompt) { |n| "Question #{n}" }
+    sequence(:position) { |n| 100 + n }
+  end
+
+  factory :entry_questionnaire do
+    tournament { association :tournament }
+    tournament_entry { association :tournament_entry, tournament: tournament }
+  end
+
+  factory :entry_questionnaire_answer do
+    association :entry_questionnaire
+    club_question { association :club_question, club: entry_questionnaire.tournament.club }
+    body { "Jig and minnow" }
+  end
+
+  factory :entry_questionnaire_dismissal do
+    association :tournament_entry
+    association :user
+  end
 end

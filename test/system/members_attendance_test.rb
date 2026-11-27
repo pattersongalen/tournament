@@ -14,6 +14,10 @@ class MembersAttendanceTest < ApplicationSystemTestCase
       entry = create(:tournament_entry, tournament: night)
       create(:tournament_entry_member, tournament_entry: entry, user: @bob)
       create(:tournament_entry_member, tournament_entry: entry, user: @anna) if i.zero?
+      species = create(:species)
+      create(:scoring_slot, tournament: night, species: species)
+      fish = create(:catch, user: @bob, species: species, captured_at_device: night.starts_at + 1.hour)
+      create(:catch_placement, tournament: night, tournament_entry: entry, catch: fish, species: species)
     end
 
     token = SignInToken.issue!(user: @organizer)
@@ -26,15 +30,19 @@ class MembersAttendanceTest < ApplicationSystemTestCase
   end
 
   test "the sort toggle reorders the list and the filter narrows it by name" do
+    page.current_window.resize_to(390, 844)
     assert page.has_css?(ROW, count: 3, wait: 5)
+    assert_selector "[data-name='Bob Boater'] [data-role='first-finishes']", text: "2"
+    assert_selector "[data-name='Anna Angler'] [data-role='first-finishes']", text: "1"
+    assert_selector "[data-name='Organizer One'] [data-role='third-finishes']", text: "0"
     assert_equal ["Bob Boater", "Anna Angler", "Organizer One"], visible_names, "default: most nights first"
 
     click_button "Name"
     assert_equal ["Anna Angler", "Bob Boater", "Organizer One"], visible_names
     assert page.has_css?("button[aria-pressed=true]", text: "Name")
-    assert page.has_css?("button[aria-pressed=false]", text: "Nights")
+    assert page.has_css?("button[aria-pressed=false]", text: "Attendance")
 
-    click_button "Nights"
+    click_button "Attendance"
     assert_equal ["Bob Boater", "Anna Angler", "Organizer One"], visible_names
 
     fill_in "Find a member", with: "bo"

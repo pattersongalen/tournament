@@ -1,0 +1,60 @@
+<% status_styles = {
+     upcoming: "bg-yellow-500/20 border-yellow-500/40 text-yellow-200",
+     active:   "bg-emerald-500/20 border-emerald-500/40 text-emerald-200",
+     ended:    "bg-slate-700 border-slate-600 text-slate-300"
+   } %>
+
+<div class="flex items-center justify-between mb-8">
+  <div>
+    <h1 class="text-3xl font-bold">Notices — <%= @foreign_club.name %></h1>
+    <p class="text-slate-400 mt-1">Popups that chosen members must acknowledge once a day.</p>
+  </div>
+  <%= link_to "New notice", new_admin_club_notice_path(@foreign_club),
+              class: "h-11 px-5 inline-flex items-center rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors" %>
+</div>
+
+<% if @notices.empty? %>
+  <p class="text-slate-400">No notices yet.</p>
+<% else %>
+  <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+    <table class="w-full text-left border-collapse">
+      <thead>
+        <tr class="bg-slate-700/50 border-b border-slate-700">
+          <th class="px-6 py-4 text-sm font-semibold text-slate-300">Title</th>
+          <th class="px-6 py-4 text-sm font-semibold text-slate-300">Shown</th>
+          <th class="px-6 py-4 text-sm font-semibold text-slate-300">Status</th>
+          <th class="px-6 py-4 text-sm font-semibold text-slate-300">Acknowledged</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-700">
+        <% @notices.each do |club_notice| %>
+          <% status = club_notice.status %>
+          <% recipients = @recipient_counts[club_notice.id] || 0 %>
+          <tr class="hover:bg-slate-700/30 transition-colors">
+            <td class="px-6 py-4 font-medium text-slate-100">
+              <%= link_to club_notice.title, admin_club_notice_path(@foreign_club, club_notice),
+                          class: "text-blue-400 hover:text-blue-300" %>
+            </td>
+            <td class="px-6 py-4 text-sm text-slate-400">
+              <%= club_notice.starts_on.strftime("%b %-d, %Y") %> – <%= club_notice.ends_on.strftime("%b %-d, %Y") %>
+            </td>
+            <td class="px-6 py-4">
+              <span class="<%= status_styles.fetch(status) %> border rounded-full px-3 py-1 text-xs font-medium"><%= status.to_s.capitalize %></span>
+            </td>
+            <td class="px-6 py-4 text-sm text-slate-400">
+              <% if status == :active %>
+                <%= @acknowledged_today_counts[club_notice.id] || 0 %> of <%= recipients %> acknowledged today
+              <% else %>
+                <%= pluralize(recipients, "recipient") %>
+              <% end %>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+<% end %>
+
+<p class="mt-6">
+  <%= link_to "← Back to #{@foreign_club.name}", admin_club_path(@foreign_club), class: "text-blue-400 hover:text-blue-300" %>
+</p>

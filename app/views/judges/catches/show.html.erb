@@ -67,7 +67,8 @@
   <%= render "catches/reference_photo_form", catch: @catch %>
 </section>
 
-<section class="bg-slate-800 rounded-xl p-4 mb-4"
+<%# `isolate` keeps the map's z-indexes inside this section, under the notice popup. %>
+<section class="bg-slate-800 rounded-xl p-4 mb-4 isolate"
          data-controller="location-edit"
          data-location-edit-lat-value="<%= @catch.latitude || 52.9 %>"
          data-location-edit-lng-value="<%= @catch.longitude || -106.0 %>"

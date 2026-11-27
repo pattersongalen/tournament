@@ -1,0 +1,38 @@
+<%# The top three's answers to the club questionnaire. Deliberately its own
+    element OUTSIDE #leaderboard and outside any turbo-frame: the leaderboard
+    is replaced by cable broadcasts, and wrapping broadcast targets in frames
+    has silently broken live updates before. %>
+<% if items.any? %>
+  <section id="what-worked" class="mt-8">
+    <h2 class="text-xl font-semibold mb-3">What worked</h2>
+    <div class="space-y-3">
+      <% items.each do |item| %>
+        <div data-place="<%= item[:place] %>" class="bg-slate-800 rounded-xl border border-slate-700 p-4">
+          <div class="flex items-baseline justify-between gap-3 mb-2">
+            <p class="font-semibold text-slate-100">
+              <span class="text-slate-400"><%= item[:place].ordinalize %></span>
+              <%= item[:entry].display_name %>
+            </p>
+            <% if item[:can_answer] %>
+              <%= link_to (item[:answered] ? "Edit answers" : "Answer"),
+                    edit_tournament_entry_questionnaire_path(tournament, item[:entry]),
+                    class: "text-sm text-blue-400 shrink-0" %>
+            <% end %>
+          </div>
+          <% if item[:answers].any? %>
+            <dl class="text-sm space-y-1">
+              <% item[:answers].each do |prompt, body| %>
+                <div><dt class="inline text-slate-400"><%= prompt %>:</dt> <dd class="inline text-slate-100"><%= body %></dd></div>
+              <% end %>
+            </dl>
+            <% if item[:answered_by] %>
+              <p class="text-xs text-slate-500 mt-2">Answered by <%= item[:answered_by] %></p>
+            <% end %>
+          <% else %>
+            <p class="text-sm text-slate-400">No answers yet.</p>
+          <% end %>
+        </div>
+      <% end %>
+    </div>
+  </section>
+<% end %>

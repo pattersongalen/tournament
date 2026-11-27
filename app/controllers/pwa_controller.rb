@@ -3,6 +3,7 @@ class PwaController < ApplicationController
   # service workers are loaded by the browser itself (not a <script> include) so the
   # cross-origin-script defense is a false positive here.
   skip_forgery_protection only: :service_worker
+  skip_notice_popup!
 
   def manifest
     render template: "pwa/manifest", formats: [:json], content_type: "application/manifest+json"

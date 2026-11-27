@@ -19,6 +19,10 @@
   <p id="club-banner" class="<%= banner_strip_classes(current_club.banner_style) %> border rounded-lg px-3 py-2 my-2 whitespace-pre-line"><%= current_club.banner_message.strip %></p>
 <% end %>
 
+<% Questionnaires::PendingFor.call(user: current_user, club: current_club).each do |item| %>
+  <%= render "home/questionnaire_card", item: item %>
+<% end %>
+
 <div class="my-4">
   <h1 class="text-2xl font-bold mb-1"><%= ENV.fetch("APP_NAME", "Tournament") %></h1>
   <p class="text-slate-400 mb-4">Hello, <%= current_user.name %>.</p>

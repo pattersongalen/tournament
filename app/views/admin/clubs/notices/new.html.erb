@@ -1,0 +1,8 @@
+<div class="mb-6">
+  <h1 class="text-3xl font-bold">New notice — <%= @foreign_club.name %></h1>
+  <p class="text-slate-400 mt-1">Each member you check must acknowledge this in a popup once a day, from the first day through the last.</p>
+</div>
+
+<%= render "form", club_notice: @notice, memberships: @memberships, selected_user_ids: @selected_user_ids,
+           url: admin_club_notices_path(@foreign_club), method: :post,
+           submit_label: "Create notice", cancel_url: admin_club_notices_path(@foreign_club) %>

@@ -3,7 +3,7 @@ class ApplicationController < ActionController::Base
   allow_browser versions: :modern
 
   before_action :touch_last_seen
-  helper_method :tournament_leaderboard_visible?, :judged_tournament_ids
+  helper_method :tournament_leaderboard_visible?, :judged_tournament_ids, :due_notice
 
   # Shared club laptop: after sign-out, Back must not replay member emails /
   # live sign-in codes from Turbo's snapshot cache (restoration visits never
@@ -14,7 +14,22 @@ class ApplicationController < ActionController::Base
     before_action { @disable_turbo_snapshot_cache = true }
   end
 
+  # The daily notice popup (shared/_notice_popup) must never interrupt someone
+  # with a fish on the bump board. Controllers on the Log Catch path call this
+  # to keep their pages clear of it; both layouts honor the flag via due_notice.
+  def self.skip_notice_popup!(**options)
+    before_action(**options) { @skip_notice_popup = true }
+  end
+
   private
+
+  # The first notice this member still has to acknowledge today, or nil.
+  # Memoized: the layout asks once per request.
+  def due_notice
+    return nil if @skip_notice_popup
+    return @due_notice if defined?(@due_notice)
+    @due_notice = Notices::DueFor.call(user: current_user, club: current_club).first
+  end
 
   def tournament_leaderboard_visible?(tournament)
     return false unless current_user && tournament

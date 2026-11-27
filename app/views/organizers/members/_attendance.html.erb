@@ -3,15 +3,17 @@
     data-role/data-name/data-nights row contract member_list_controller.js
     sorts and filters on can't drift between the two pages. %>
 <% if @season_tag.nil? %>
-  <p class="text-slate-400 <%= wide ? '' : 'mt-4' %>">No season configured yet, so there are no league nights to count.</p>
+  <p class="text-slate-400 <%= wide ? '' : 'mt-4' %>">No season configured yet, so there is no attendance to show.</p>
 <% else %>
   <%# Mains only (Sides don't award points), counted from kickoff rather than
       from the end of the night — one higher than the standings page during a
       league night. %>
   <p class="text-sm text-slate-400 mb-4"
-     title="League-night Mains entered this season, counted from the start of the night">
-    League-night Mains fished this season (<%= @season_tag %>)
+     title="Attendance at Main tournaments this season, counted once each tournament starts">
+    Attendance this season (<%= @season_tag %>)
   </p>
+
+  <p class="text-sm text-slate-400 mb-4">1st, 2nd and 3rd count finishes in completed Main tournaments this season. Each team member gets the finish.</p>
 
   <div data-controller="member-list">
     <%= render "organizers/members/attendance_controls" %>
@@ -22,7 +24,10 @@
           <thead>
             <tr class="bg-slate-700/50 border-b border-slate-700">
               <th class="px-6 py-4 text-sm font-semibold text-slate-300">Name</th>
-              <th class="px-6 py-4 text-sm font-semibold text-slate-300 text-right">Main nights</th>
+              <th class="px-6 py-4 text-sm font-semibold text-slate-300 text-right">Attendance</th>
+              <% %w[1st 2nd 3rd].each do |place| %>
+                <th class="px-6 py-4 text-sm font-semibold text-slate-300 text-right"><%= place %></th>
+              <% end %>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-700" data-member-list-target="list">
@@ -30,17 +35,26 @@
               <%= tag.tr class: "hover:bg-slate-700/30 transition-colors", data: row_data.call(user, nights) do %>
                 <td class="px-6 py-4 font-medium text-slate-100"><%= user.name %></td>
                 <td class="px-6 py-4 font-mono text-right text-slate-100"><%= nights %></td>
+                <% @placement_counts.fetch(user.id, [0, 0, 0]).each_with_index do |count, place| %>
+                  <td class="px-6 py-4 font-mono text-right text-slate-100" data-role="<%= %w[first second third][place] %>-finishes"><%= count %></td>
+                <% end %>
               <% end %>
             <% end %>
           </tbody>
         </table>
       </div>
     <% else %>
+      <div class="grid grid-cols-[minmax(0,1fr)_4.5rem_repeat(3,2rem)] gap-2 px-4 mb-2 text-xs text-slate-400" aria-hidden="true">
+        <span>Name</span><span class="text-right">Attendance</span><span class="text-right">1st</span><span class="text-right">2nd</span><span class="text-right">3rd</span>
+      </div>
       <ul class="space-y-2" data-member-list-target="list">
         <% @rows.each do |user, nights| %>
-          <%= tag.li class: "bg-slate-800 rounded-lg px-4 py-3 flex items-center justify-between gap-3", data: row_data.call(user, nights) do %>
-            <strong><%= user.name %></strong>
-            <span class="font-mono text-lg"><%= nights %></span>
+          <%= tag.li class: "bg-slate-800 rounded-lg px-4 py-3 grid grid-cols-[minmax(0,1fr)_4.5rem_repeat(3,2rem)] items-center gap-2", data: row_data.call(user, nights) do %>
+            <strong class="min-w-0 break-words"><%= user.name %></strong>
+            <span class="font-mono text-right" aria-label="Attendance"><%= nights %></span>
+            <% @placement_counts.fetch(user.id, [0, 0, 0]).each_with_index do |count, place| %>
+              <span class="font-mono text-right" data-role="<%= %w[first second third][place] %>-finishes" aria-label="<%= %w[First Second Third][place] %>-place finishes"><%= count %></span>
+            <% end %>
           <% end %>
         <% end %>
       </ul>

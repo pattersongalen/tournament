@@ -1,6 +1,11 @@
 <div class="flex items-center justify-between mt-4 mb-4">
   <h1 class="text-2xl font-semibold">Fishing Map</h1>
-  <%= link_to "List view", catches_path(request.query_parameters), class: "text-blue-400 font-medium" %>
+  <div class="flex items-center gap-4">
+    <% if current_club&.heat_map_enabled? %>
+      <%= link_to "Club heat map", heat_map_catches_path, class: "text-blue-400 font-medium" %>
+    <% end %>
+    <%= link_to "List view", catches_path(request.query_parameters), class: "text-blue-400 font-medium" %>
+  </div>
 </div>
 
 <%= render "shared/catch_calendar",
@@ -21,7 +26,7 @@
 
 <%= render "catches/match_conditions", path_helper: :map_catches_path %>
 
-<div class="relative w-full aspect-[3/4] rounded-xl overflow-hidden shadow-xl border border-slate-700"
+<div class="relative isolate w-full aspect-[3/4] rounded-xl overflow-hidden shadow-xl border border-slate-700"
      data-controller="map"
      data-map-points-value="<%= @map_points.to_json %>">
   <div class="absolute inset-0 bg-slate-800 flex items-center justify-center text-slate-500 italic">

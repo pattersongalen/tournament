@@ -340,6 +340,8 @@ class Admin::MembersControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Old Name", names.first
     assert_select "tr[data-role='member'][data-name='Old Name'][data-nights='2']"
     assert_select "tr[data-role='member'][data-name='Zed Zero'][data-nights='0']"
+    %w[1st 2nd 3rd].each { |place| assert_select "th", text: place }
+    assert_select "tr[data-name='Zed Zero'] [data-role='first-finishes']", text: "0"
     assert_select "tr[data-role='member'][data-name='Gone Gary']", count: 0
     assert_equal names[1..].sort_by(&:downcase), names[1..], "ties on zero nights sort by name"
   end

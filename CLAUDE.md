@@ -67,7 +67,7 @@ Namespaced areas plus public routes:
 - `/organizers/*` — tournament CRUD, member management, judge assignment, catch history, templates (mobile-friendly)
 - `/judges/tournaments/:tournament_id/*` — catch review (approve/flag/DQ/manual override)
 - `/admin/*` — laptop admin UI; organizer-only; same data as `/organizers/*` with a wider layout
-- `/admin/clubs/*` — site-admin only; create clubs and invite/manage members across clubs
+- `/admin/clubs/*` — site-admin only; create clubs, invite/manage members across clubs, and manage each club's banner, acknowledgment notices, questionnaire questions and heat map
 - `/api/*` — offline catch submission, push subscription management
 - Public: catches logging, tournament leaderboards, sign-in flow
 
@@ -75,7 +75,7 @@ Namespaced areas plus public routes:
 
 Multi-club: a single deployment can host multiple `Club`s. Tournaments, templates, and per-club roles are club-scoped; `User`s and `Species` are global. Users join clubs via `ClubMembership` (which carries the per-club role); a single user can belong to multiple clubs with different roles.
 
-Core models: `User`, `Club`, `ClubMembership`, `Catch`, `Tournament`, `ScoringSlot`, `TournamentEntry`, `CatchPlacement`, `JudgeAction`, `Species`, `PushSubscription`, `SignInToken`, `TournamentTemplate`.
+Core models: `User`, `Club`, `ClubMembership`, `Catch`, `Tournament`, `ScoringSlot`, `TournamentEntry`, `CatchPlacement`, `JudgeAction`, `Species`, `PushSubscription`, `SignInToken`, `TournamentTemplate`, `ClubNotice`, `ClubNoticeRecipient`, `ClubNoticeAcknowledgment`, `ClubQuestion`, `EntryQuestionnaire`, `EntryQuestionnaireAnswer`, `EntryQuestionnaireDismissal`.
 
 Key patterns:
 - Soft deletes via `deactivated_at` on User, `active: false` on CatchPlacement
@@ -89,6 +89,8 @@ Business logic lives in `app/services/` using the `Module::Class` pattern with a
 - `Catches::PlaceInSlots` — Core scoring: places a catch into tournament scoring slots, broadcasts leaderboard, triggers push notifications
 - `Catches::ApplyFilters` — Applies the catch history / map filters (species, lake, length, time-of-day, month, wind, pressure, moon); shared by `CatchesController#index` and `#map`
 - `Catches::FilterBands` — Single source of truth for filter cut points (pressure bands, wind speed bins, moon-phase bins); used by both server-side filtering and the filter-bar UI
+- `Catches::HeatMapFilters` — Turns the club heat map's query params into safe, defaulted filter values (species, length, date range); invalid input falls back to a default, never raises
+- `Catches::HeatMapPoints` — The club heat map's points: `[lat, lng]` pairs for the club's catches, coordinates only, in shuffled order, from one `pluck`
 - `Leaderboards::Build` — Builds ranked leaderboard by summing active placement lengths per entry
 - `Placements::BroadcastLeaderboard` — Turbo Stream replace to the tournament channel
 - `Placements::DetectNotifications` — Detects bumped-from-slot and took-the-lead events
@@ -96,6 +98,11 @@ Business logic lives in `app/services/` using the `Module::Class` pattern with a
 - `Tournaments::WinnersFor` — Batched per-tournament winner lookup for the archived-tournaments index (avoids N+1 across many tournaments)
 - `Catches::ApplyJudgeAction` — Applies judge actions (approve/flag/DQ) to catches
 - `TournamentTemplates::Clone` — Clones a template into a new tournament
+- `Notices::DueFor` — The notices a member must still acknowledge today (active on the day, sent to them, not yet acknowledged for that day); drives the blocking daily popup rendered by both layouts
+- `Questionnaires::EligibleEntries` — The boats a finished season-points tournament asks "what worked": its current top three, computed from the standings on every read (never stored), so a post-end disqualification changes who is asked
+- `Questionnaires::PendingFor` — A member's home-page questionnaire cards; one query narrows to candidate entries before any leaderboard is built
+- `Questionnaires::SaveAnswers` — Write rules for a boat's answers (active questions only, blank clears, at least one answer)
+- `Questionnaires::WhatWorked` — Rows for the "What worked" section on a finished tournament's page
 
 ## JavaScript / PWA
 
@@ -120,6 +127,7 @@ Test directories: `test/models/`, `test/controllers/` (including api/judges/orga
 - Enums stored as integers
 - No member self-signup; organizers add members
 - Catch photo detail pages gated to organizers/judges only
+- Other members' catch coordinates are shown rounded to 2 decimals (about 1 km). The club heat map (`/catches/heat_map`) is the one deliberate exception: it uses exact coordinates, is off per club until a site admin turns it on (`clubs.heat_map_enabled`), and sends the browser coordinates only. Only a site admin can choose its species; members and organizers see Walleye only (not Tagged Walleye), enforced in `CatchesController#heat_map`. Do not add rounding, jitter or a minimum-angler rule to it, and do not add any other catch detail to its pages, without asking first.
 
 ## Branching workflow
 

@@ -146,6 +146,10 @@ class Organizers::MembersControllerTest < ActionDispatch::IntegrationTest
       entry = create(:tournament_entry, tournament: night)
       create(:tournament_entry_member, tournament_entry: entry, user: ralph)
       create(:tournament_entry_member, tournament_entry: entry, user: gone)
+      species = create(:species)
+      create(:scoring_slot, tournament: night, species: species)
+      fish = create(:catch, user: ralph, species: species, captured_at_device: night.starts_at + 1.hour)
+      create(:catch_placement, tournament: night, tournament_entry: entry, catch: fish, species: species)
     end
 
     get attendance_organizers_members_path
@@ -156,6 +160,9 @@ class Organizers::MembersControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-role='member'][data-name='Regular Ralph'][data-nights='2']"
     assert_select "[data-role='member'][data-name='Zed Zero'][data-nights='0']"
     assert_select "[data-role='member'][data-name='Gone Gary']", count: 0
+    assert_select "[data-name='Regular Ralph'] [data-role='first-finishes']", text: "2"
+    assert_select "[data-name='Regular Ralph'] [data-role='second-finishes']", text: "0"
+    assert_select "[data-name='Zed Zero'] [data-role='third-finishes']", text: "0"
     assert_match(/Wed 2026/, response.body)
   end
 
