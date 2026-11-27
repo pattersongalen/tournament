@@ -40,9 +40,9 @@ class MembersAttendanceTest < ApplicationSystemTestCase
     click_button "Name"
     assert_equal ["Anna Angler", "Bob Boater", "Organizer One"], visible_names
     assert page.has_css?("button[aria-pressed=true]", text: "Name")
-    assert page.has_css?("button[aria-pressed=false]", text: "Nights")
+    assert page.has_css?("button[aria-pressed=false]", text: "Attendance")
 
-    click_button "Nights"
+    click_button "Attendance"
     assert_equal ["Bob Boater", "Anna Angler", "Organizer One"], visible_names
 
     fill_in "Find a member", with: "bo"
